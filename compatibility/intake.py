@@ -14,6 +14,7 @@ import subprocess
 import sys
 from typing import Any
 from zipfile import BadZipFile, ZipFile
+from zlib import error as ZlibError
 
 from .pilot import ADAPTER, ROOT, UI
 
@@ -46,6 +47,14 @@ MARKER = '<!-- reverie-compatibility-v1 '
 
 class IntakeError(Exception):
     """A stable, content-free intake failure."""
+
+
+class ResourceUnavailable(IntakeError):
+    """An issue, run, or artifact lookup returned 404 or 410."""
+
+
+class ProofError(IntakeError):
+    """An individual issue's artifact is missing, expired, or invalid."""
 
 
 def matches(value, pattern):
@@ -191,20 +200,33 @@ def pair_from_fields(fields):
     return Pair(**fields)
 
 
-def parse(row):
-    text, author = row.get('body'), row.get('user')
-    if (not isinstance(author, dict) or author.get('id') != BOT_ID or author.get('login') != BOT
-            or not isinstance(text, str) or not text.startswith(MARKER) or 'pull_request' in row):
+def bot_issue(row):
+    author = row.get('user')
+    return (isinstance(author, dict) and author.get('id') == BOT_ID and author.get('login') == BOT
+            and 'pull_request' not in row and row.get('repository_url') == API_REPO
+            and positive(row.get('number')) and positive(row.get('id'))
+            and row.get('state') in ('open', 'closed'))
+
+
+def marker_fields(text):
+    if not isinstance(text, str) or not text.startswith(MARKER):
         return None
-    if (len(text) > 4096 or row.get('repository_url') != API_REPO
-            or not positive(row.get('number')) or not positive(row.get('id'))
-            or row.get('state') not in ('open', 'closed')):
-        raise IntakeError('invalid-machine-issue')
-    first = text.split('\n', 1)[0]
+    first = text[:len(MARKER) + 1029].split('\n', 1)[0]
     if not first.endswith(' -->'):
         raise IntakeError('invalid-machine-issue')
-    fields = object_json(first[len(MARKER):-4], 1024)
-    if set(fields) != {'pair', 'source'} or not isinstance(fields['source'], dict):
+    return object_json(first[len(MARKER):-4], 1024)
+
+
+def parse(row):
+    if not bot_issue(row):
+        return None
+    text = row.get('body')
+    if not isinstance(text, str) or not text.startswith(MARKER):
+        return None
+    if len(text) > 4096:
+        raise IntakeError('invalid-machine-issue')
+    fields = marker_fields(text)
+    if fields is None or set(fields) != {'pair', 'source'} or not isinstance(fields['source'], dict):
         raise IntakeError('invalid-machine-issue')
     pair = pair_from_fields(fields['pair'])
     try:
@@ -219,9 +241,20 @@ def parse(row):
 def prior(api, pair):
     related = []
     for row in api.issues('all'):
-        ref = parse(row)
-        if ref is not None and ref[0].key == pair.key:
-            related.append((row, ref))
+        if not bot_issue(row):
+            continue
+        # An edited record can reserve a pair, but only a canonical ref can
+        # confirm a POST whose response was lost.
+        key = None
+        try:
+            fields = marker_fields(row.get('body'))
+            values = fields.get('pair') if fields else None
+            if isinstance(values, dict) and digest(values.get('ui')) and digest(values.get('adapter')):
+                key = (values['ui'], values['adapter'])
+        except IntakeError:
+            pass
+        if (key == pair.key) or (key is None and row.get('title') == title(pair)):
+            related.append(row)
     if len(related) > 1:
         raise IntakeError('duplicate-pair-issues')
     return related[0] if related else None
@@ -242,9 +275,9 @@ def file_issue(api, pair, source):
     except IntakeError:
         # A timed-out POST may have succeeded. Refetch once; never retry the write here.
         found = prior(api, pair)
-        if not found or found[1] != (pair, source):
+        if found is None:
             raise IntakeError('create-unconfirmed') from None
-        number = found[0]['number']
+        number = found['number']
     row = api.issue(number)
     if row.get('number') != number or parse(row) != (pair, source):
         raise IntakeError('issue-readback-mismatch')
@@ -253,7 +286,7 @@ def file_issue(api, pair, source):
 
 def verified(api, pair, source):
     run = api.run(source)
-    # The notifier is itself a job in this attempt. Do not wait for it to finish.
+    # The issue writer may still be running when its issue becomes visible.
     if (run.get('status') not in ('completed', 'in_progress') or run.get('id') != source.run
             or run.get('run_attempt') != source.attempt or run.get('path') != WORKFLOW
             or run.get('event') != source.event or run.get('head_branch') != 'main'
@@ -336,7 +369,11 @@ def scan(api, state):
         if ref is None:
             continue
         n = stub['number']
-        row = api.issue(n)
+        try:
+            row = api.issue(n)
+        except ResourceUnavailable as e:
+            print(f'intake: issue #{n}: {e}', file=sys.stderr)
+            continue
         try:
             if (row.get('number') != n or row.get('state') != 'open'
                     or row.get('id') != stub.get('id') or parse(row) != ref):
@@ -353,13 +390,19 @@ def scan(api, state):
             with closing(ledger(state)) as db, db:
                 db.execute(TABLE)
                 acknowledged, _ = matches_receipt(db, row)
-        if acknowledged == 0 or (acknowledged is None and verified(api, pair, source)):
+        try:
+            if acknowledged is None and not verified(api, pair, source):
+                continue
+        except (ResourceUnavailable, ProofError) as e:
+            print(f'intake: issue #{n}: {e}', file=sys.stderr)
+            continue
+        if acknowledged != 1:
             normalized.append(row)
     return pending(state, normalized)
 
 
 class GitHub:
-    def call(self, endpoint, *, post=None, pages=False, raw=False) -> Any:
+    def call(self, endpoint, *, post=None, pages=False, raw=False, missing_ok=False) -> Any:
         args = ['gh', 'api', '--hostname', 'github.com', API_PATH + '/' + endpoint]
         if pages:
             args += ['--paginate', '--slurp']
@@ -370,6 +413,10 @@ class GitHub:
                                       capture_output=True, timeout=15, check=True,
                                       env=os.environ | {'GH_PROMPT_DISABLED': '1'})
             return response.stdout if raw else json.loads(response.stdout)
+        except subprocess.CalledProcessError as e:
+            if missing_ok and re.search(rb'^gh: [^\r\n]* \(HTTP (?:404|410)\)\r?$', e.stderr or b'', re.M):
+                raise ResourceUnavailable('github-resource-unavailable') from None
+            raise IntakeError('github-request-failed') from None
         except (OSError, ValueError, subprocess.SubprocessError):
             raise IntakeError('github-request-failed') from None
 
@@ -378,16 +425,17 @@ class GitHub:
         return [row for page in pages for row in page]
 
     def issue(self, number):
-        return self.call(f'issues/{number}')
+        return self.call(f'issues/{number}', missing_ok=True)
 
     def create(self, title, body):
         return self.call('issues', post={'title': title, 'body': body, 'labels': [], 'assignees': []})
 
     def run(self, source):
-        return self.call(f'actions/runs/{source.run}/attempts/{source.attempt}')
+        return self.call(f'actions/runs/{source.run}/attempts/{source.attempt}', missing_ok=True)
 
     def jobs(self, source):
-        pages = self.call(f'actions/runs/{source.run}/attempts/{source.attempt}/jobs?per_page=100', pages=True)
+        pages = self.call(f'actions/runs/{source.run}/attempts/{source.attempt}/jobs?per_page=100',
+                          pages=True, missing_ok=True)
         jobs = [job for page in pages for job in page['jobs']]
         if not pages or any(len(jobs) != p['total_count'] for p in pages):
             raise IntakeError('incomplete-attempt-jobs')
@@ -395,20 +443,21 @@ class GitHub:
 
     def proof(self, source):
         name = f'compatibility-proof-{source.attempt}'
-        pages = self.call(f'actions/runs/{source.run}/artifacts?name={name}&per_page=100', pages=True)
+        pages = self.call(f'actions/runs/{source.run}/artifacts?name={name}&per_page=100',
+                          pages=True, missing_ok=True)
         artifacts = [a for page in pages for a in page['artifacts']]
         if not pages or any(len(artifacts) != p['total_count'] for p in pages):
             raise IntakeError('incomplete-attempt-artifacts')
         if len(artifacts) != 1:
-            raise IntakeError('missing-or-ambiguous-proof')
+            raise ProofError('missing-or-ambiguous-proof')
         a = artifacts[0]
         size = a.get('size_in_bytes')
         if (a.get('name') != name or a.get('expired') is not False or not positive(a.get('id'))
                 or not positive(size) or size > 4096 or not digest(a.get('digest'))):
-            raise IntakeError('invalid-or-expired-proof')
-        archive = self.call(f"actions/artifacts/{a['id']}/zip", raw=True)
+            raise ProofError('invalid-or-expired-proof')
+        archive = self.call(f"actions/artifacts/{a['id']}/zip", raw=True, missing_ok=True)
         if len(archive) > 4096 or 'sha256:' + hashlib.sha256(archive).hexdigest() != a['digest']:
-            raise IntakeError('proof-archive-mismatch')
+            raise ProofError('proof-archive-mismatch')
         return decode_proof(archive)
 
 
@@ -420,9 +469,9 @@ def decode_proof(archive):
             if (len(entries) == 1 and entries[0].filename == 'proof.json'
                     and entries[0].file_size <= 1024):
                 return pair_from_fields(object_json(z.read(entries[0]), 1024))
-    except (BadZipFile, RuntimeError, NotImplementedError):
+    except (BadZipFile, RuntimeError, NotImplementedError, EOFError, ZlibError, IntakeError):
         pass
-    raise IntakeError('invalid-proof-archive')
+    raise ProofError('invalid-proof-archive')
 
 
 def read_object(path):

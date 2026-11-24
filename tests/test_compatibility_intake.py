@@ -4,11 +4,13 @@ from dataclasses import asdict
 import io
 import json
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 from zipfile import ZipFile
 
 from compatibility import intake as i
@@ -35,6 +37,8 @@ class Fake:
         self.bad_job = False
         self.bad_run = False
         self.evidence = {}
+        self.missing_runs = set()
+        self.missing_issues = set()
         self.lost = False
         self.hidden = False
 
@@ -43,6 +47,8 @@ class Fake:
                 if not self.hidden and (state == 'all' or x['state'] == state)]
 
     def issue(self, number):
+        if number in self.missing_issues:
+            raise i.ResourceUnavailable('github-resource-unavailable')
         return copy.deepcopy(self.items[number])
 
     def create(self, title, body):
@@ -55,6 +61,8 @@ class Fake:
         return self.issue(n)
 
     def run(self, source):
+        if source in self.missing_runs:
+            raise i.ResourceUnavailable('github-resource-unavailable')
         return dict(id=source.run, run_attempt=source.attempt, path=i.WORKFLOW,
                     event='pull_request' if self.bad_run else source.event,
                     head_branch='main', head_sha=source.sha, repository={'id': i.REPO_ID},
@@ -65,7 +73,10 @@ class Fake:
                      conclusion='failure' if self.bad_job else 'success')]
 
     def proof(self, source):
-        return self.evidence[source]
+        evidence = self.evidence[source]
+        if isinstance(evidence, Exception):
+            raise evidence
+        return evidence
 
 
 class IntakeTest(unittest.TestCase):
@@ -112,6 +123,20 @@ class IntakeTest(unittest.TestCase):
         with self.assertRaises(i.IntakeError):
             i.file_issue(self.api, self.record, self.source)
         self.assertEqual(self.api.posts, 2)
+
+    def test_edited_issue_cannot_confirm_an_uncertain_write(self):
+        original_create = self.api.create
+
+        def create_with_lost_response(title, body):
+            original_create(title, body)
+            self.api.items[11]['body'] += '\nNot the canonical record'
+            raise i.IntakeError('github-request-failed')
+
+        with patch.object(self.api, 'create', side_effect=create_with_lost_response):
+            with self.assertRaises(i.IntakeError):
+                i.file_issue(self.api, self.record, self.source)
+        self.assertIsNone(i.file_issue(self.api, self.record, self.source))
+        self.assertEqual(self.api.posts, 1)
 
     def test_untrusted_and_pending_cases_never_claim(self):
         i.file_issue(self.api, self.record, self.source)
@@ -182,9 +207,66 @@ class IntakeTest(unittest.TestCase):
     def test_machine_marker_and_payload_cannot_be_edited(self):
         i.file_issue(self.api, self.record, self.source)
         self.api.items[11]['body'] += '\nUntrusted free text'
-        with self.assertRaises(i.IntakeError):
-            i.file_issue(self.api, self.record, self.source)
+        self.assertIsNone(i.file_issue(self.api, self.record, self.source))
         self.assertEqual(self.api.posts, 1)
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(i.scan(self.api, Path(d)/'ledger.sqlite'), [])
+
+    def test_edited_closed_issue_reserves_only_its_own_pair(self):
+        i.file_issue(self.api, self.record, self.source)
+        self.api.items[11].update(title='Triaged', state='closed',
+                                  body=self.api.items[11]['body'] + '\n' + 'x' * 5000)
+        other = i.Source(124, 1, 'b'*40, 'schedule')
+        self.api.evidence[other] = i.Pair(D('d'), i.ADAPTER_DIGEST, 'unsupported-version')
+        self.assertEqual(i.file_issue(self.api, self.api.evidence[other], other), 12)
+        self.assertIsNone(i.file_issue(self.api, self.record, self.source))
+        self.assertEqual(self.api.posts, 2)
+
+    def test_missing_marker_with_original_title_blocks_only_its_own_pair(self):
+        i.file_issue(self.api, self.record, self.source)
+        self.api.items[11]['body'] = 'Notes, original marker accidentally removed'
+        other = i.Source(124, 1, 'b'*40, 'schedule')
+        self.api.evidence[other] = i.Pair(D('d'), i.ADAPTER_DIGEST, 'unsupported-version')
+        self.assertIsNone(i.file_issue(self.api, self.record, self.source))
+        self.assertEqual(i.file_issue(self.api, self.api.evidence[other], other), 12)
+
+    def test_bad_evidence_or_vanished_issue_does_not_hide_valid_work(self):
+        other = i.Source(124, 1, 'b'*40, 'schedule')
+        new = i.Pair(D('d'), i.ADAPTER_DIGEST, 'unsupported-version')
+        i.file_issue(self.api, self.record, self.source)
+        self.api.evidence[other] = new
+        i.file_issue(self.api, new, other)
+        cases = ('invalid-or-expired-proof', 'missing-or-ambiguous-proof', 'deleted-run', 'vanished-issue')
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as d:
+                self.api.evidence[self.source] = self.record if case in cases[2:] else i.ProofError(case)
+                self.api.missing_runs = {self.source} if case == 'deleted-run' else set()
+                self.api.missing_issues = {11} if case == 'vanished-issue' else set()
+                state = Path(d)/'ledger.sqlite'
+                self.assertEqual([x['issue'] for x in i.scan(self.api, state)], [12])
+                with closing(sqlite3.connect(state)) as db:
+                    self.assertEqual(db.execute('SELECT issue FROM intake').fetchall(), [(12,)])
+
+    def test_transport_failure_still_fails_the_sweep_without_receipt(self):
+        i.file_issue(self.api, self.record, self.source)
+        self.api.evidence[self.source] = i.IntakeError('github-request-failed')
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d)/'ledger.sqlite'
+            with self.assertRaisesRegex(i.IntakeError, 'github-request-failed'):
+                i.scan(self.api, state)
+            self.assertFalse(state.exists())
+
+    def test_gh_classifies_only_scoped_404_410_as_missing_evidence(self):
+        api = i.GitHub()
+        for code in (401, 403, 404, 410, 429, 500):
+            error = subprocess.CalledProcessError(1, ['gh'], stderr=f'gh: Error (HTTP {code})\n'.encode())
+            with self.subTest(code=code), patch('compatibility.intake.subprocess.run', side_effect=error):
+                with self.assertRaises(i.ResourceUnavailable if code in (404, 410) else i.IntakeError) as result:
+                    api.run(self.source)
+                self.assertEqual(type(result.exception), i.ResourceUnavailable if code in (404, 410) else i.IntakeError)
+                with self.assertRaises(i.IntakeError) as listing:
+                    api.issues('open')
+                self.assertIs(type(listing.exception), i.IntakeError)
 
     def test_duplicate_pair_fails_closed(self):
         i.file_issue(self.api, self.record, self.source)
