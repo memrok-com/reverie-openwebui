@@ -80,19 +80,29 @@ class PilotTests(unittest.TestCase):
         manifest = pilot.compose()
         self.assertEqual(manifest['volumes'], {'ui_data': {}, 'engine_data': {}})
         self.assertEqual(manifest['networks'], {'private': {'internal': True}})
-        for name, service in manifest['services'].items():
+        for service in manifest['services'].values():
             self.assertEqual(service['platform'], 'linux/amd64')
             self.assertIn(service['image'], (pilot.UI, pilot.ADAPTER))
             self.assertEqual(service['pull_policy'], 'never')
+            self.assertEqual(service['networks'], ['private'])
             self.assertNotIn('build', service)
             self.assertNotIn('env_file', service)
             self.assertNotIn('docker.sock', json.dumps(service))
             self.assertNotIn('container_name', service)
             self.assertNotIn('privileged', service)
-            if name != 'ui':
-                self.assertNotIn('ports', service)
-        self.assertEqual(manifest['services']['ui']['ports'], ['127.0.0.1::8080'])
+            self.assertNotIn('ports', service)
         self.assertEqual(manifest['services']['adapter']['volumes'], ['engine_data:/data'])
+
+    def test_browser_url_is_bound_to_the_disposable_ui_network(self):
+        key = 'reverie-pilot-test_private'
+        metadata = {'NetworkSettings': {'Networks': {key: {'IPAddress': '172.18.0.4'}}}}
+        self.assertEqual(pilot.ui_url(metadata, 'reverie-pilot-test'), 'http://172.18.0.4:8080')
+        for address in ('', '8.8.8.8', '127.0.0.1', '172.18.0.4/path'):
+            metadata['NetworkSettings']['Networks'][key]['IPAddress'] = address
+            with self.assertRaises(ValueError):
+                pilot.ui_url(metadata, 'reverie-pilot-test')
+        with self.assertRaises(ValueError):
+            pilot.ui_url(metadata, 'a-different-project')
 
     def test_docker_environment_does_not_inherit_host_secrets(self):
         from pathlib import Path

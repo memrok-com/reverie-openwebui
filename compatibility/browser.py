@@ -8,9 +8,6 @@ from playwright.sync_api import expect, sync_playwright
 
 
 def check(base, prompts, password, collect, checkpoint):
-    if not re.fullmatch(r'http://127\.0\.0\.1:[1-9][0-9]{0,4}', base):
-        raise ValueError('expected a disposable loopback UI')
-
     def api(path, data, token=None):
         headers = {'Content-Type': 'application/json'}
         if token:

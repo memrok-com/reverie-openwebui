@@ -2,6 +2,7 @@
 """Report-only released-artifact compatibility pilot. Docker runs only on explicit invocation."""
 import argparse
 import hashlib
+from ipaddress import IPv4Address, IPv4Network
 import json
 import os
 from pathlib import Path
@@ -29,7 +30,7 @@ def compose(ui=UI):
              'security_opt': ['no-new-privileges:true'], 'pids_limit': 256}
     return {'services': {
         'ui': {**guard, 'image': ui, 'platform': 'linux/amd64', 'pull_policy': 'never',
-            'ports': ['127.0.0.1::8080'], 'mem_limit': '3g',
+            'mem_limit': '3g',
             'environment': {
                 'ENABLE_OLLAMA_API': 'false', 'ENABLE_OPENAI_API': 'true',
                 'OPENAI_API_BASE_URL': 'http://fixture:8000/v1',
@@ -57,6 +58,18 @@ def compose(ui=UI):
             'volumes': [{'type': 'bind', 'source': str(ROOT/'demo/fixture.py'),
                          'target': '/pilot/fixture.py', 'read_only': True}]}},
         'networks': {'private': {'internal': True}}, 'volumes': {'ui_data': {}, 'engine_data': {}}}
+
+
+def ui_url(metadata, project):
+    """Use the private bridge IP from the just-inspected exact UI; publish no ports."""
+    networks = metadata['NetworkSettings']['Networks']
+    name = project + '_private'
+    if set(networks) != {name}:
+        raise ValueError('unexpected-ui-network')
+    address = IPv4Address(networks[name]['IPAddress'])
+    if not any(address in IPv4Network(cidr) for cidr in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16')):
+        raise ValueError('ui-address-not-private')
+    return f'http://{address}:8080'
 
 
 def evaluate(evidence):
@@ -156,11 +169,14 @@ def main():
             started = True
             step = 'compose-start-and-image-identity'
             docker.compose(['up', '-d', '--pull', 'never'], timeout=300)
+            ui_metadata = {}
             for service, ref in (('ui', ui), ('adapter', ADAPTER), ('fixture', UI)):
                 cid = docker.compose(['ps', '-q', service]).decode().strip()
                 actual = json.loads(docker.run(['inspect', cid]))[0]
                 if actual['Image'] != report['images'][ref]:
                     raise RuntimeError('container-image-mismatch')
+                if service == 'ui':
+                    ui_metadata = actual
             step = 'ui-readiness'
             for attempt in range(120):
                 try:
@@ -182,13 +198,14 @@ def main():
             if bootstrap.get('status') != 'ready':
                 report.update(status=bootstrap.get('status', 'indeterminate'), check=bootstrap.get('check', 'bootstrap-failed'))
             else:
-                step = 'headless-journey'
-                address = docker.compose(['port', 'ui', '8080']).decode().strip()
+                step = 'private-browser-target'
+                base = ui_url(ui_metadata, project)
+                step = 'browser-import'
                 if __package__:
                     from .browser import check
                 else:
                     from browser import check
-                evidence = check('http://' + address, PROMPTS, PASSWORD,
+                evidence = check(base, PROMPTS, PASSWORD,
                                  lambda: docker.inside('collect'), checkpoint)
                 (output/'evidence.json').write_text(json.dumps(evidence, indent=2) + '\n')
                 report['status'], report['check'] = evaluate(evidence)
