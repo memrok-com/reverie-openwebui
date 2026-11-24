@@ -132,6 +132,34 @@ class DeleteTests(unittest.IsolatedAsyncioTestCase):
         await self.n['Event']().event({'event':'chat.deleted_all','subject':{'type':'user','id':'owner'},'data':{}})
         self.assertEqual(self.n['rpc'].await_count, 2)
 
+    async def test_deleted_account_cleans_subject_across_continuities_not_actor(self):
+        n = self.n
+        n['register_scene']('owner', 'second', 'second-scene')
+        n['register_scene']('admin', 'admin-character', 'admin-scene')
+        for character, chat in (('character', 'scene'), ('second', 'second-scene'),
+                                ('admin-character', 'admin-scene')):
+            n['set_anchor'](character, chat, 'reply', [])
+        self.present.clear()
+        n['rpc'].side_effect = lambda _, method, params: {
+            'episodeId':params['episodeId'], 'invalidatedEpisodes':1}
+        event = {'event':'user.deleted', 'actor':{'id':'admin'},
+                 'subject':{'type':'user','id':'owner'}, 'data':{}}
+        for invalid in ({'type':'chat','id':'owner'}, {'type':'user','id':''}):
+            await n['Event']().event({**event, 'subject':invalid})
+        n['chat_exists'].assert_not_awaited()
+        await n['Event']().event(event)
+        await n['Event']().event(event)
+        self.assertCountEqual([call.args for call in n['rpc'].await_args_list], [
+            ('character', 'forget', {'episodeId':'scene'}),
+            ('second', 'forget', {'episodeId':'second-scene'}),
+        ])
+        self.assertCountEqual([call.args for call in n['chat_exists'].await_args_list], [
+            ('owner', 'scene'), ('owner', 'second-scene'),
+        ])
+        self.assertIsNone(n['anchor']('character', 'scene'))
+        self.assertIsNone(n['anchor']('second', 'second-scene'))
+        self.assertIsNotNone(n['anchor']('admin-character', 'admin-scene'))
+
     async def test_legacy_anchor_is_not_silently_trusted(self):
         self.n['set_anchor']('character', 'legacy', 'reply', [])
         with self.assertRaisesRegex(self.n['SceneError'], 'clean-install'):

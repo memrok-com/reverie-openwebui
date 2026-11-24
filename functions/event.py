@@ -11,11 +11,11 @@ class Event:
         chat_id = None
         if kind == 'chat.deleted' and subject.get('type') == 'chat':
             owner, chat_id = data.get('owner_id'), subject.get('id')
-            if not isinstance(owner, str) or not isinstance(chat_id, str):
+            if not isinstance(owner, str) or not owner or not isinstance(chat_id, str) or not chat_id:
                 return
-        elif kind == 'chat.deleted_all' and subject.get('type') == 'user':
+        elif kind in ('chat.deleted_all', 'user.deleted') and subject.get('type') == 'user':
             owner = subject.get('id')
-            if not isinstance(owner, str):
+            if not isinstance(owner, str) or not owner:
                 return
         elif kind == 'folder.deleted' and data.get('delete_contents') is True:
             # Cascades may span folders. Check only registered IDs, each bound

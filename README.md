@@ -128,14 +128,17 @@ unchanged. Cached recall provenance for the affected character is discarded
 conservatively, so the inspector may show no verified record for surviving replies.
 Their source anchors remain available for branch verification and re-memorizing.
 
-The active Event handles native chat, bulk-user and folder-content deletion.
+The active Event handles single-chat, bulk-chat, folder-content and account deletion.
 Events are best effort in Open WebUI; an owner/character/chat registry in
 `reverie.sqlite`, written before the first date or formation RPC, also reconciles
 confirmed missing scenes before memory use. Presence checks select only registered
 chat IDs bound to their owners. Database errors never count as deletion. Failed
-cleanup pauses memory use and retries next time, including after a restart or an
-interrupted event. Concurrent operations are checked again before memory is used;
-a changed continuity requires a retry. Keep the Event active for prompt cleanup.
+cleanup pauses memory use and retries next time in a surviving continuity, including
+after a restart or an interrupted event. Concurrent operations are checked again
+before memory is used; a changed continuity requires a retry. Keep the Event active
+for prompt cleanup. If an account-deletion event is missed or cannot finish, there
+is no next use by that account to retry cleanup. v0.1 has no background sweep;
+residual memory may remain.
 
 **Keep surviving memorized chats in their original private folder.** Archive,
 move and share are reversible and do not trigger forget. They can pause the
