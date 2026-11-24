@@ -1,0 +1,132 @@
+name: Open WebUI compatibility probe
+on:
+  pull_request:
+    paths:
+      - 'compatibility/**'
+      - 'demo/**'
+      - 'tests/test_compatibility*.py'
+      - '.github/workflows/compatibility.yml'
+  schedule:
+    - cron: '37 4 * * *'
+  workflow_dispatch:
+permissions: {}
+jobs:
+  latest:
+    name: Probe upstream latest
+    if: >-
+      github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' ||
+      (github.repository_id == '1469823243' && github.ref == 'refs/heads/main' &&
+        github.event_name == 'schedule' && vars.REVERIE_COMPAT_ARMED == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      proof: ${{ steps.qualify.outputs.proof }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Resolve the candidate digest
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/heads/main && "$GITHUB_EVENT_NAME" != pull_request ]]; then
+            digest=$(docker buildx imagetools inspect ghcr.io/open-webui/open-webui:latest --format '{{.Manifest.Digest}}')
+            kind=proof
+          else
+            # Deliberate installer-refusal fixture. This never becomes a published issue.
+            digest=sha256:46b59158e6558eeb980bc828e0f1b30238ad24d82ed84d5e5eda1dab2a082f14
+            kind=fixture
+          fi
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          printf 'digest=%s\nkind=%s\n' "$digest" "$kind" >> "$GITHUB_OUTPUT"
+      - name: Install headless browser
+        run: |
+          python3 -m venv "$RUNNER_TEMP/compat-venv"
+          "$RUNNER_TEMP/compat-venv/bin/pip" install 'playwright==1.65.2'
+          "$RUNNER_TEMP/compat-venv/bin/python" -m playwright install --with-deps chromium
+      - name: Confirm exact pair
+        id: qualify
+        env:
+          UI_DIGEST: ${{ steps.image.outputs.digest }}
+          PROBE_KIND: ${{ steps.image.outputs.kind }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$UI_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          d=$(mktemp -d "$RUNNER_TEMP/reverie-compat.XXXXXXXX")
+          trap 'rm -rf -- "$d"' EXIT
+          python="$RUNNER_TEMP/compat-venv/bin/python"
+          probe() {
+            env -i HOME="$HOME" PATH="$PATH" LANG=C.UTF-8 \
+              "$python" -B -m compatibility.pilot --ui-digest "$1" --output "$d/$2" > "$d/$2.log"
+          }
+          first=0
+          probe "$UI_DIGEST" first || first=$?
+          case "$first" in
+            0) [[ "$PROBE_KIND" == proof ]] || { printf 'Expected fixture refusal did not occur\n'; exit 1; }
+               printf '%s: tested/pass (fresh install only)\n' "$UI_DIGEST"; exit 0 ;;
+            1) ;;
+            *) printf '%s: indeterminate; no issue\n' "$UI_DIGEST"; exit 1 ;;
+          esac
+          baseline=$(python3 -B -c 'from compatibility.intake import UI_DIGEST; print(UI_DIGEST)')
+          [[ "$UI_DIGEST" != "$baseline" ]] || { printf 'Supported control failed; no issue\n'; exit 1; }
+          repeat=0
+          probe "$UI_DIGEST" repeat || repeat=$?
+          if [[ "$repeat" != 1 ]] || ! probe "$baseline" control; then
+            printf '%s: indeterminate; no matching repeat and green control\n' "$UI_DIGEST"
+            exit 1
+          fi
+          proof=$(python3 -B -m compatibility.intake qualify --candidate "$UI_DIGEST" \
+            --first "$d/first/result.json" --repeat "$d/repeat/result.json" --control "$d/control/result.json")
+          [[ -n "$proof" ]] || { printf 'Indeterminate observations; no issue\n'; exit 1; }
+          umask 077
+          mkdir "$RUNNER_TEMP/compatibility-confirmed"
+          printf '%s\n' "$proof" > "$RUNNER_TEMP/compatibility-confirmed/proof.json"
+          printf 'proof=%s\n' "$proof" >> "$GITHUB_OUTPUT"
+          printf '%s: confirmed incompatible (fresh install only)\n' "$UI_DIGEST"
+      - name: Publish narrow proof
+        if: steps.qualify.outputs.proof != ''
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: compatibility-${{ steps.image.outputs.kind }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/compatibility-confirmed/proof.json
+          if-no-files-found: error
+          retention-days: 90
+
+  file-issue:
+    name: File confirmed incompatibility
+    needs: latest
+    if: >-
+      github.repository_id == '1469823243' && github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      vars.REVERIE_COMPAT_ARMED == 'true' && needs.latest.outputs.proof != ''
+    concurrency:
+      group: reverie-compatibility-issue-writer
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Create or find the exact-pair issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROOF: ${{ needs.latest.outputs.proof }}
+          REVERIE_COMPAT_ARMED: ${{ vars.REVERIE_COMPAT_ARMED }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          number=$(printf '%s' "$PROOF" | python3 -B -m compatibility.intake file)
+          if [[ -n "$number" ]]; then
+            [[ "$number" =~ ^[1-9][0-9]{0,15}$ ]]
+            printf 'Created and verified issue #%s\n' "$number"
+          fi
