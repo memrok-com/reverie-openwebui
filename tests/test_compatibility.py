@@ -2,9 +2,11 @@
 import copy
 import hashlib
 import json
+import sys
 import unittest
+from unittest.mock import Mock, patch
 
-from compatibility import pilot
+from compatibility import inside, pilot
 
 
 def evidence():
@@ -23,6 +25,28 @@ def evidence():
 
 
 class PilotTests(unittest.TestCase):
+    def test_bootstrap_grants_player_read_on_stock_base_model_before_install(self):
+        installer = Mock()
+        timeline = Mock()
+        timeline.attach_mock(installer.apply, 'install')
+        timeline.api.side_effect = [
+            {'version': '0.13.4'}, {}, {'role': 'admin', 'token': 'admin-session'},
+            {}, {'role': 'user', 'id': 'synthetic-player'}, {'id': 'synthetic-companion'},
+        ]
+        with patch.dict(sys.modules, {'install': installer}), patch.object(sys, 'path', sys.path[:]), \
+                patch.object(inside, 'api', timeline.api):
+            self.assertEqual(inside.bootstrap()['status'], 'ready')
+        registration, installation = timeline.mock_calls[-2:]
+        self.assertEqual(registration.args[0], '/api/v1/models/create')
+        self.assertEqual(registration.args[2], 'admin-session')
+        model = registration.args[1]
+        self.assertEqual(model['id'], 'synthetic-companion')
+        self.assertIsNone(model.get('base_model_id'))
+        self.assertEqual(model['access_grants'], [
+            {'principal_type': 'user', 'principal_id': 'synthetic-player', 'permission': 'read'},
+        ])
+        self.assertEqual(installation[0], 'install')
+
     def test_complete_evidence_passes(self):
         self.assertEqual(pilot.evaluate(evidence())[0], 'tested/pass')
 

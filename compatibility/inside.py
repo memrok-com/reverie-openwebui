@@ -49,6 +49,18 @@ def bootstrap():
     admin, player = responses['admin-signin'], responses['player-signin']
     if admin.get('role') != 'admin' or player.get('role') != 'user':
         return {'status': 'indeterminate', 'check': 'synthetic-account-roles'}
+    # Stock discovery hides unregistered provider models from ordinary users.
+    # Register the base model itself and grant read only to the synthetic player.
+    try:
+        model = api('/api/v1/models/create', {
+            'id': 'synthetic-companion', 'name': 'synthetic-companion',
+            'base_model_id': None, 'meta': {}, 'params': {},
+            'access_grants': [{'principal_type': 'user', 'principal_id': player['id'], 'permission': 'read'}],
+        }, admin['token'])
+    except HTTPError as error:
+        return {'status': 'indeterminate', 'check': 'stock-base-model-registration', 'http_status': error.code}
+    if not model or model.get('id') != 'synthetic-companion':
+        return {'status': 'indeterminate', 'check': 'stock-base-model-registration'}
     try:
         install.apply(install.Client('http://127.0.0.1:8080', admin['token']),
                       install.bundle('synthetic-companion', player['id']))
