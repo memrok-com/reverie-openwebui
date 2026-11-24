@@ -1,0 +1,21 @@
+{
+  "purpose": "Synthetic native flow for a fresh private installation; no roleplay quality assessment",
+  "user": "ordinary disposable user with preset read access",
+  "steps": [
+    {"do": "Create private folder; select Reverie Companion as its default", "expect": "Preset selected in native folder settings"},
+    {"do": "Send a synthetic harbor-compass scene; enter 2024-02-30 and then Cancel", "expect": "Invalid date guidance; no fixture reply request; saved prompt remains"},
+    {"do": "Regenerate → Try Again; enter 2024-06-01", "expect": "One completed reply for the original prompt and active/date native status"},
+    {"do": "Inspect before memorizing", "expect": "Verified completed reply with no recalled memories"},
+    {"do": "Memorize through the selected reply; cancel confirmation", "expect": "No reflection; prior records retained"},
+    {"do": "Memorize through the selected reply; confirm", "expect": "Reflection source IDs stop at selected reply; confirmed save status"},
+    {"do": "Repeat Memorize through the same reply", "expect": "Already memorized; no new reflection request"},
+    {"do": "Create earlier scene dated 2024-05-01 then later scene dated 2024-07-01; cue compass harbor", "expect": "Earlier scene excludes future contribution; inspect later reply shows actual structured supplied memories"},
+    {"do": "Complete synthetic [fail-reflection] scene and confirm Memorize", "expect": "Failure notification; no success; prior completed provenance remains"},
+    {"do": "Select synthetic-other per chat inside enabled folder", "expect": "Recall remains on; no preset Actions"},
+    {"do": "Disable folder default and play ordinary model", "expect": "No date/recall; retained memory is not erased"},
+    {"do": "Select preset per chat outside enabled folder and invoke either Action", "expect": "Activation help only; no memory read or write"},
+    {"do": "Attempt shared scope, Continue or attachment in enabled folder", "expect": "Refused without provider request or completed provenance"}
+  ],
+  "evidence": "Native UI state, adapter outcomes, internal fixture /evidence IDs/hashes; never log played real content",
+  "excluded": ["copied or moved chats", "shared folders", "full redate", "repair", "restore", "deployment", "usability verdict"]
+}

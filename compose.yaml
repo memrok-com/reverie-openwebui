@@ -1,0 +1,84 @@
+name: reverie_alpha
+x-image: &image ghcr.io/open-webui/open-webui@sha256:0c4439e78c24c85e3e7a41936771d3b02f0df38daf28a086cd83ca74804f7676
+services:
+  ui:
+    image: *image
+    pull_policy: never
+    environment:
+      ENABLE_OLLAMA_API: 'false'
+      ENABLE_OPENAI_API: 'true'
+      OPENAI_API_BASE_URL: http://fixture:8000/v1
+      OPENAI_API_KEY: synthetic-not-a-secret
+      ENABLE_SIGNUP: 'true'
+      ENABLE_PERSISTENT_CONFIG: 'false'
+      ENABLE_VERSION_UPDATE_CHECK: 'false'
+      ENABLE_TITLE_GENERATION: 'false'
+      ENABLE_TAGS_GENERATION: 'false'
+      ENABLE_FOLLOW_UP_GENERATION: 'false'
+      ENABLE_AUTOCOMPLETE_GENERATION: 'false'
+      OFFLINE_MODE: 'true'
+      HF_HUB_OFFLINE: '1'
+      DO_NOT_TRACK: 'true'
+      RAG_EMBEDDING_ENGINE: openai
+      REVERIE_REFLECTION_URL: http://fixture:8000/v1/chat/completions
+      REVERIE_REFLECTION_MODEL: synthetic-companion
+      REVERIE_REFLECTION_REASONING_EFFORT: 'none'
+      REVERIE_ADAPTER_TOKEN: synthetic-only-demo-never-use-in-production-00000000
+      REVERIE_ADAPTER_URL: http://reverie:8766
+    volumes:
+      - ui_data:/app/backend/data
+      - ./install.py:/package/install.py:ro
+      - ./functions:/package/functions:ro
+    networks: [private]
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: 1.5
+    pids_limit: 128
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    depends_on: [reverie, fixture]
+  reverie:
+    image: *image
+    pull_policy: never
+    entrypoint: [python3, -B, /package/adapter.py]
+    healthcheck: {disable: true}
+    environment:
+      REVERIE_ADAPTER_TOKEN: synthetic-only-demo-never-use-in-production-00000000
+      REVERIE_ENGINE: /probe/reverie-engine
+      REVERIE_DATA: /data
+    volumes:
+      - ./adapter.py:/package/adapter.py:ro
+      - type: bind
+        source: ${REVERIE_ENGINE_BINARY:?Set absolute path to the pinned release executable}
+        target: /probe/reverie-engine
+        read_only: true
+        bind: {create_host_path: false}
+      - engine_data:/data
+    read_only: true
+    networks: [private]
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+  fixture:
+    image: *image
+    pull_policy: never
+    entrypoint: [python3, -B, /package/fixture.py]
+    healthcheck: {disable: true}
+    volumes: [ './demo/fixture.py:/package/fixture.py:ro' ]
+    read_only: true
+    networks: [private]
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.25
+    pids_limit: 32
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+networks:
+  private:
+    internal: true
+volumes:
+  ui_data:
+  engine_data:

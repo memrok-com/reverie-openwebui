@@ -1,0 +1,60 @@
+name: Versioned release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate version and ancestry
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          tag = os.environ['RELEASE_TAG']
+          if not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag):
+              raise SystemExit('A stable semver tag is required.')
+          import install
+          for function in install.bundle('check', 'check')['functions']:
+              if '\nversion: ' + tag[1:] + '\n' not in function['content']:
+                  raise SystemExit('Bundle version must match the release tag.')
+          PY
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main
+      - run: sh scripts/stage-engine.sh
+      - name: Build exact versioned image
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          git diff --check "$(git hash-object -t tree /dev/null)" HEAD
+          docker build --network none --tag reverie-openwebui:release \
+            --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
+            --label "org.opencontainers.image.version=$RELEASE_TAG" .
+      - name: Test before registry writes
+        run: |
+          docker run --rm --network none --entrypoint python3 \
+            --mount "type=bind,src=$PWD,dst=/tests-source,readonly" \
+            --workdir /tests-source --env REVERIE_TEST_ENGINE=/probe/reverie-engine \
+            reverie-openwebui:release -B -m unittest discover -s tests -v
+      - name: Push versioned image
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: |
+          export DOCKER_CONFIG
+          DOCKER_CONFIG=$(mktemp -d)
+          trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$REGISTRY_USER" --password-stdin
+          docker tag reverie-openwebui:release "ghcr.io/memrok-com/reverie-openwebui:$RELEASE_TAG"
+          docker push "ghcr.io/memrok-com/reverie-openwebui:$RELEASE_TAG"
