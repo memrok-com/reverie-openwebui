@@ -1,0 +1,24 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: sh scripts/stage-engine.sh
+      - run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
+      - run: docker build --network none --tag reverie-openwebui:ci .
+      - name: Test with real engine
+        run: |
+          docker run --rm --network none --entrypoint python3 \
+            --mount "type=bind,src=$PWD,dst=/tests-source,readonly" \
+            --workdir /tests-source --env REVERIE_TEST_ENGINE=/probe/reverie-engine \
+            reverie-openwebui:ci -B -m unittest discover -s tests -v

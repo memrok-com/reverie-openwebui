@@ -1,0 +1,15 @@
+**
+!Dockerfile
+!adapter.py
+!install.py
+!LICENSE
+!functions/
+!functions/common.py
+!functions/filter.py
+!functions/inspect.py
+!functions/memorize.py
+!.stage/
+!.stage/engine/
+!.stage/engine/reverie-engine
+!.stage/engine/LICENSE
+!.stage/engine/NOTICE
