@@ -150,6 +150,11 @@ class AdapterTests(unittest.TestCase):
         for _ in range(3):
             self.assertEqual(self.http("GET", "/jobs/" + job.id), (200, result))
 
+    def test_forget_is_allowed_and_reaches_engine_without_callbacks(self):
+        result = self.wait(self.start('forget', params={'episodeId':'synthetic-scene'}))
+        self.assertEqual(result['result']['method'], 'forget')
+        self.assertEqual(result['result']['params'], {'episodeId':'synthetic-scene'})
+
     def test_full_callback_frames_and_exact_replies(self):
         job = self.start("memorize")
         value = self.wait(job, "callback", "source")

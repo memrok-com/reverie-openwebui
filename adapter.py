@@ -29,7 +29,7 @@ MAX_JOBS = 128
 MAX_ACTIVE = 16
 JOB_SECONDS = 900
 RETENTION_SECONDS = 300
-METHODS = {"ping", "when", "retrieve", "inspect", "memorize", "status"}
+METHODS = {"ping", "when", "retrieve", "inspect", "memorize", "status", "forget"}
 CHARACTER = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,63}\Z", re.ASCII)
 
 

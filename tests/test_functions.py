@@ -38,6 +38,7 @@ class FunctionTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.ns['DB'] = self.temp.name+'/records.sqlite'
+        self.ns['chat_exists'] = AsyncMock(return_value=True)
 
     async def test_ordinary_chat_without_token_is_noop(self):
         self.folder.data = {}
@@ -100,6 +101,7 @@ class FunctionTests(unittest.IsolatedAsyncioTestCase):
             self.chat if cid == 'c' else old if cid == 'archived-scene' else None)
         character, _ = await n['scope'](user, 'c')
         prefix = n['played'](old, 'r')
+        n['register_scene']('u', character, old.id)
         n['set_anchor'](character, old.id, 'r', prefix)
         n['rpc'] = AsyncMock(side_effect=[{'now': 0}, {'text': '', 'historicalText': ''}])
         filt = n['Filter']()
@@ -118,7 +120,7 @@ class FunctionTests(unittest.IsolatedAsyncioTestCase):
         n['rpc'].reset_mock()
 
         self.chats.get_chat_by_id_and_user_id.side_effect = lambda cid, uid: self.chat if cid == 'c' else None
-        with self.assertRaisesRegex(ValueError, 'If it was deleted, disable Reverie'):
+        with self.assertRaisesRegex(ValueError, 'Retry if storage is unavailable'):
             await filt.inlet(body, user, 'c', metadata, AsyncMock())
         self.folder.data = {'model_ids':['ordinary']}
         self.assertIs(await filt.inlet(body, user, 'c', metadata, AsyncMock()), body)
@@ -129,6 +131,7 @@ class FunctionTests(unittest.IsolatedAsyncioTestCase):
     async def test_changed_private_source_keeps_re_memoize_recovery(self):
         n = self.ns
         character, _ = await n['scope']({'id':'u'}, 'c')
+        n['register_scene']('u', character, 'c')
         n['set_anchor'](character, 'c', 'r', n['played'](self.chat, 'r'))
         self.chat.chat['history']['messages']['r']['content'] = 'Edited reply'
         with self.assertRaisesRegex(n['SceneError'], 'Memorize the selected branch again') as cm:

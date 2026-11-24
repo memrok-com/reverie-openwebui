@@ -91,11 +91,12 @@ docker compose exec -T open-webui rm -rf -- "$package_dir"
 ```
 
 The installer checks exact `/api/version`, all Function/model ID conflicts and
-base-model availability before writes. It creates three Functions, activates the
-Filter globally and the two preset Actions, and creates the companion preset
-with explicit user read access. It reads back Function content and activation,
-preset fields and model discovery. It refuses redirects, non-loopback URLs and
-conflicts. It never logs credentials or response bodies. Creation is not atomic:
+base-model availability before writes. It creates four Functions, activates the
+Filter globally, the native deletion Event and the two preset Actions, and
+creates the companion preset with explicit user read access. It reads back
+Function content and activation, preset fields and model discovery. It refuses
+redirects, non-loopback URLs and conflicts. It never logs credentials or response
+bodies. Creation is not atomic:
 if any step fails, inspect the partial state and stop; rerunning cannot repair it.
 There is no automatic rollback or restore tool.
 
@@ -119,19 +120,35 @@ successful save. Changed published source branches block further play until
 explicitly memorized again. **What reached this reply?** shows structured recall
 and authorized source titles/dates for a verified completed reply.
 
-**Keep memorized chats in their original private folder.** Archiving, moving,
-sharing, or deleting one pauses Reverie for the whole folder; it does not erase
-Reverie's stored memory. If the chat still exists, unarchive it if needed, move
-the original chat back to that folder, and turn off sharing. Open WebUI does not
-put unarchived chats back in their folders automatically. If you changed the
-saved branch, memorize the intended reply again after returning the chat.
+Use Open WebUI’s native **Delete** once to remove a scene’s Reverie episode and
+invalidate later memory contributions and corrections. Cleanup calls the existing
+engine forget operation without a reflection provider. Unaffected earlier memory
+remains; surviving scenes can be memorized again. Already-written replies stay
+unchanged. Cached recall provenance for the affected character is discarded
+conservatively, so the inspector may show no verified record for surviving replies.
+Their source anchors remain available for branch verification and re-memorizing.
 
-If the chat was deleted, v0.1 cannot recover its source or resume that folder's
-memory. To keep using its remaining chats without Reverie, change the folder's
-first default model to an ordinary model and select an ordinary chat model if
-needed. This does not remove chats or erase the saved Reverie data. To start a
-fresh continuity, enable Reverie in a new private folder; old memory does not
-carry over. Do not edit or delete either database to unblock a folder.
+The active Event handles native chat, bulk-user and folder-content deletion.
+Events are best effort in Open WebUI; an owner/character/chat registry in
+`reverie.sqlite`, written before the first date or formation RPC, also reconciles
+confirmed missing scenes before memory use. Presence checks select only registered
+chat IDs bound to their owners. Database errors never count as deletion. Failed
+cleanup pauses memory use and retries next time, including after a restart or an
+interrupted event. Concurrent operations are checked again before memory is used;
+a changed continuity requires a retry. Keep the Event active for prompt cleanup.
+
+**Keep surviving memorized chats in their original private folder.** Archive,
+move and share are reversible and do not trigger forget. They can pause the
+continuity until the original chat is unarchived if needed, returned to its
+original folder, and made private. Open WebUI does not restore folders on unarchive.
+Changed branches can be explicitly memorized again. Folder deletion without
+contents does not purge memory; surviving chats remain subject to the scope guard.
+
+Deletion removes logical engine memory and local provenance, with minimal ID-only
+registry tombstones retained for safe retry. It does not promise physical erasure
+from database pages or backups, rewrite old upstream replies, or touch other
+continuities. This installer supports clean installation only: unknown legacy source
+anchors fail closed; migration from private preview releases is not supported.
 
 After installation, check package readback success, a completed scene and explicit
 save in an enabled folder, and an ordinary chat outside enabled folders. The
@@ -139,7 +156,7 @@ ordinary chat must receive no memory changes. Switching only the per-chat model
 inside an enabled folder keeps recall enabled but may hide preset Actions.
 
 Nested/shared folders, attachments, tools, Continue, moved/copied chats, schema
-migration, redating, deletion controls and restore are outside v0.1. Records live
+migration, redating and restore are outside v0.1. Records live
 in the UI data volume; engine databases live in `reverie_data`. Keep both volumes.
 The synthetic demo does not establish real-provider quality, whether memory
 formation fits the adapter's wait limit on your provider, or production
@@ -150,6 +167,7 @@ a preview or demo transcript is not evidence of an actual save.
 
 First change enabled folders to an ordinary default model. In native Admin
 Functions, disable the global **Reverie continuity** Filter and deactivate the
+**Reverie native deletion** Event and the
 **What reached this reply?** and **Memorize through this reply** Actions. Remove
 their attachments from the companion preset or disable/remove that preset in
 native model administration. Verify an ordinary chat, then stop and remove the

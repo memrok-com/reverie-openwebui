@@ -20,7 +20,7 @@ class NoRedirect(HTTPRedirectHandler):
 def bundle(base_model, user_id):
     common = (ROOT/'functions/common.py').read_text()
     functions = []
-    for kind, name in (('filter','Reverie continuity'), ('inspect','What reached this reply?'), ('memorize','Memorize through this reply')):
+    for kind, name in (('filter','Reverie continuity'), ('inspect','What reached this reply?'), ('memorize','Memorize through this reply'), ('event','Reverie native deletion')):
         content = ('"""\ntitle: '+name+'\nversion: 0.1.0\n"""\n'+common+'\n'+(ROOT/f'functions/{kind}.py').read_text())
         functions.append({'id':'reverie_'+kind, 'name':name, 'content':content, 'meta':{}})
     model = {'id':'reverie-companion', 'name':'Reverie Companion', 'base_model_id':base_model,
@@ -58,7 +58,8 @@ def items(value):
 
 def verify_function(value, expected, global_filter=False):
     if (not isinstance(value,dict) or any(value.get(k) != expected[k] for k in ('id','name','content'))
-            or value.get('is_active') is not True or value.get('is_global') is not global_filter):
+            or value.get('is_active') is not True or value.get('is_global') is not global_filter
+            or (expected['id'] == 'reverie_event' and value.get('type') != 'event')):
         raise InstallError('Function readback differed from the bundle; stop and inspect the installation.')
 
 
@@ -122,7 +123,7 @@ def main():
                 raise InstallError('Apply requires --token-stdin.')
             token = sys.stdin.readline().rstrip('\r\n')
             apply(Client(args.url,token), package)
-            print('Created and verified three Functions, global Filter and Reverie Companion preset.')
+            print('Created and verified four Functions, active Event, global Filter and Reverie Companion preset.')
     except (InstallError, OSError) as error:
         parser.exit(1, str(error)+'\n')
 

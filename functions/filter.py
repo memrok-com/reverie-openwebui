@@ -21,6 +21,9 @@ class Filter:
                     or [{'role':m['role'],'text':m['content']} for m in messages if m['role'] != 'system']
                        != [{'role':m['role'],'text':m['text']} for m in prefix]):
                 raise SceneError('UNSUPPORTED_REQUEST', 'Reverie could not verify the plain-text saved branch. No reply was sent.')
+            owner = field(__user__, 'id')
+            register_scene(owner, character, chat.id)
+            token = await guard(owner, character, current=chat.id)
             await verify_published_sources(__user__, character)
             try:
                 episode = await rpc(character, 'when', {'episodeId':chat.id})
@@ -28,7 +31,9 @@ class Filter:
                 if error.code != 'EPISODE_TIME_REQUIRED':
                     raise
                 position = await ask_date(__event_call__)
+                await guard(owner, character, token, chat.id)
                 episode = await rpc(character, 'when', {'episodeId':chat.id,'position':position})
+            await guard(owner, character, token, chat.id)
             prior = records(character, chat.id, prefix)
             recall = await rpc(character, 'retrieve', {'episodeId':chat.id,'at':episode['now'],
                 'cue':prefix[-1]['text'],'recallHistory':activations(prefix,prior)})
@@ -56,7 +61,8 @@ class Filter:
                     raise SceneError('INVALID_RECALL', 'A recalled source is not before this scene’s date.')
                 title = field(origin[1], 'title') or field(origin[1], 'chat', {}).get('title') or 'Untitled scene'
                 recall['sources'][source_id] = {'title':str(title),'at':dated['now']}
-            stage(character, chat.id, reply, fingerprint(prefix), recall)
+            await guard(owner, character, token, chat.id)
+            stage(character, chat.id, reply, fingerprint(prefix), recall, expected=token)
             text = '\n'.join(t for t in (recall['text'], recall['historicalText']) if t)
             if text:
                 # Copy before modifying so a rejected request cannot mutate shared input.
@@ -69,7 +75,7 @@ class Filter:
             return body
         except SceneError as error:
             raise ValueError(str(error)) from None
-        except (KeyError, TypeError, AttributeError, ValueError):
+        except (KeyError, TypeError, AttributeError, ValueError, sqlite3.Error):
             raise ValueError('Reverie could not verify this request. No reply was sent; use a saved plain-text prompt.') from None
 
     async def outlet(self, body, __user__, __event_emitter__=None):
@@ -78,10 +84,12 @@ class Filter:
             if not scoped or not body.get('messages') or body['messages'][-1].get('finish_reason') != 'stop':
                 return body
             character, chat = scoped
+            token = await guard(field(__user__, 'id'), character, current=chat.id)
             prefix = played(chat, body['id'])
-            if publish(character, chat.id, body['id'], prefix) and __event_emitter__:
+            if publish(character, chat.id, body['id'], prefix, expected=token) and __event_emitter__:
                 record = records(character, chat.id, prefix).get(body['id'])
-                await __event_emitter__({'type':'status','data':{'description':'Story date: '+scene_day(record['at']),'done':True}})
-        except SceneError:
+                if record:
+                    await __event_emitter__({'type':'status','data':{'description':'Story date: '+scene_day(record['at']),'done':True}})
+        except (SceneError, sqlite3.Error):
             pass  # Never publish provenance for an unverifiable or incomplete reply.
         return body

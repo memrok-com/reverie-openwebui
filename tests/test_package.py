@@ -20,7 +20,7 @@ class PackageTests(unittest.TestCase):
         for function in package['functions']:
             compile(function['content'], function['id'], 'exec')
             self.assertNotIn('__OPTED__',function['content'])
-        self.assertEqual([x['id'] for x in package['functions']],['reverie_filter','reverie_inspect','reverie_memorize'])
+        self.assertEqual([x['id'] for x in package['functions']],['reverie_filter','reverie_inspect','reverie_memorize','reverie_event'])
 
     def test_installer_rejects_nonlocal_and_conflicts_before_writes(self):
         for url in ('https://example.invalid','http://localhost.evil','http://127.0.0.1/x','http://user@localhost','http://localhost?x=y'):
@@ -113,5 +113,43 @@ class PackageTests(unittest.TestCase):
     def test_fixture_is_branch_specific_and_can_fail(self):
         request = {'input':{'episode':{'id':'e','messages':[{'id':'p','role':'user','text':'[fail-reflection]'}]}}}
         with self.assertRaises(ValueError): reflection(request)
+
+
+class EventInstallationTests(unittest.TestCase):
+    def test_clean_install_activates_event_without_global_flag(self):
+        package = install.bundle('synthetic', 'owner')
+        class Fake:
+            def __init__(self):
+                self.functions = {}
+                self.model = None
+                self.writes = []
+            def call(self, path, value=None):
+                if value is not None:
+                    self.writes.append(path)
+                if path == '/api/version': return {'version':'0.13.4'}
+                if path == '/api/v1/functions/': return []
+                if path == '/api/v1/models/all': return []
+                if path == '/api/models':
+                    return {'data':[{'id':'synthetic'}] + ([self.model] if self.model else [])}
+                if path == '/api/v1/functions/create':
+                    assert isinstance(value, dict)
+                    kind = 'event' if value['id']=='reverie_event' else 'filter' if value['id']=='reverie_filter' else 'action'
+                    self.functions[value['id']] = {**value, 'type':kind, 'is_active':False, 'is_global':False}
+                elif path.startswith('/api/v1/functions/id/'):
+                    parts = path.split('/')
+                    function = self.functions[parts[5]]
+                    if path.endswith('/global'): function['is_global'] = True
+                    elif path.endswith('/toggle'): function['is_active'] = True
+                    return function
+                elif path == '/api/v1/models/create': self.model = value
+                elif path.startswith('/api/v1/models/model?'): return self.model
+        client = Fake()
+        install.apply(client, package)
+        event = client.functions['reverie_event']
+        self.assertTrue(event['is_active'])
+        self.assertFalse(event['is_global'])
+        self.assertTrue(client.functions['reverie_filter']['is_global'])
+        ns, _, _ = load('event')
+        self.assertTrue(callable(ns['Event']().event))
 
 if __name__=='__main__': unittest.main()

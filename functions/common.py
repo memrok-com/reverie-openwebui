@@ -84,14 +84,99 @@ def db_open():
     db.execute('CREATE TABLE IF NOT EXISTS records (character TEXT, chat TEXT, reply TEXT, prefix TEXT, live INTEGER, value TEXT, PRIMARY KEY(character,chat,reply))')
     db.execute('CREATE TABLE IF NOT EXISTS pending (character TEXT, chat TEXT, reply TEXT, prefix TEXT, value TEXT, PRIMARY KEY(character,chat,reply))')
     db.execute('CREATE TABLE IF NOT EXISTS published (character TEXT, chat TEXT, reply TEXT, prefix TEXT, PRIMARY KEY(character,chat))')
+    db.execute('CREATE TABLE IF NOT EXISTS scenes (owner TEXT, character TEXT, chat TEXT PRIMARY KEY, cleaned INTEGER NOT NULL DEFAULT 0)')
+    db.execute('CREATE TABLE IF NOT EXISTS generations (character TEXT PRIMARY KEY, value INTEGER NOT NULL)')
     return db
+
+async def chat_exists(owner, chat_id):
+    # Native getters swallow database errors. Only a successful minimal SELECT
+    # can establish absence; never read chat bodies or enumerate an owner's chats.
+    try:
+        from sqlalchemy import select
+        from open_webui.internal.db import get_async_db_context
+        from open_webui.models.chats import Chat
+        async with get_async_db_context() as db:
+            result = await db.execute(select(Chat.id).where(Chat.id == chat_id, Chat.user_id == owner))
+            return result.scalar_one_or_none() is not None
+    except Exception:
+        raise SceneError('SOURCE_STATE', 'Scene presence could not be verified. Retry when storage is available.') from None
+
+def register_scene(owner, character, chat_id):
+    with closing(db_open()) as db, db:
+        row = db.execute('SELECT owner,character,cleaned FROM scenes WHERE chat=?', (chat_id,)).fetchone()
+        if not row and db.execute('SELECT 1 FROM published WHERE chat=?', (chat_id,)).fetchone():
+            raise SceneError('LEGACY_SOURCE', 'Untracked source anchors require a clean installation; preview migration is unsupported.')
+        db.execute('INSERT OR IGNORE INTO scenes(owner,character,chat) VALUES (?,?,?)', (owner,character,chat_id))
+        row = db.execute('SELECT owner,character,cleaned FROM scenes WHERE chat=?', (chat_id,)).fetchone()
+        if row != (owner, character, 0):
+            raise SceneError('SCENE_OWNERSHIP', 'This scene cannot be registered in this continuity.')
+
+def generation(character):
+    with closing(db_open()) as db:
+        row = db.execute('SELECT value FROM generations WHERE character=?', (character,)).fetchone()
+        return row[0] if row else 0
+
+async def reconcile(owner, character):
+    with closing(db_open()) as db:
+        scenes = db.execute('SELECT chat,cleaned FROM scenes WHERE owner=? AND character=?', (owner,character)).fetchall()
+        unknown = db.execute('SELECT 1 FROM published p WHERE character=? AND NOT EXISTS (SELECT 1 FROM scenes s WHERE s.chat=p.chat AND s.owner=? AND s.character=p.character AND s.cleaned=0)', (character,owner)).fetchone()
+    if unknown:
+        raise SceneError('LEGACY_SOURCE', 'Untracked memory sources cannot be verified. This clean-install release does not migrate earlier preview data.')
+    for chat_id, cleaned in scenes:
+        if cleaned or await chat_exists(owner, chat_id):
+            continue
+        # Durable invalidation precedes transport. A crash or busy engine leaves
+        # this scene retryable; forget is idempotent, including after lost replies.
+        with closing(db_open()) as db, db:
+            db.execute('INSERT INTO generations VALUES (?,1) ON CONFLICT(character) DO UPDATE SET value=value+1', (character,))
+        result = await rpc(character, 'forget', {'episodeId':chat_id})
+        count = field(result, 'invalidatedEpisodes')
+        if not isinstance(result, dict) or result.get('episodeId') != chat_id or type(count) is not int or count < 0:
+            raise SceneError('FORGET_UNVERIFIED', 'Memory cleanup was not verified. Retry before using memory.')
+        with closing(db_open()) as db, db:
+            if not db.execute('UPDATE scenes SET cleaned=1 WHERE owner=? AND character=? AND chat=? AND cleaned=0',
+                              (owner,character,chat_id)).rowcount:
+                continue  # A concurrent retry already completed the local cleanup.
+            # Context can include broader impressions without per-item lineage.
+            # Conservatively discard all cached provenance in this character.
+            db.execute('DELETE FROM records WHERE character=?', (character,))
+            db.execute('DELETE FROM pending WHERE character=?', (character,))
+            db.execute('DELETE FROM published WHERE character=? AND chat=?', (character,chat_id))
+
+            # Also fence readers that began after invalidation but before cleanup.
+            db.execute('UPDATE generations SET value=value+1 WHERE character=?', (character,))
+
+async def guard(owner, character, expected=None, current=None):
+    missing = current is not None and not await chat_exists(owner, current)
+    if missing:
+        # An operation may have started just after an earlier forget completed.
+        # Rearm cleanup so its late publication cannot escape the journal.
+        with closing(db_open()) as db, db:
+            db.execute('UPDATE scenes SET cleaned=0 WHERE owner=? AND character=? AND chat=?', (owner,character,current))
+    await reconcile(owner, character)
+    if missing:
+        raise SceneError('SOURCE_DELETED', 'The scene was deleted. Retry in a surviving scene.')
+    now = generation(character)
+    if expected is not None and now != expected:
+        raise SceneError('MEMORY_CHANGED', 'Memory changed during this operation. Retry in a surviving scene.')
+    return now
+
 
 def anchor(character, chat):
     with closing(db_open()) as db:
         return db.execute('SELECT reply,prefix FROM published WHERE character=? AND chat=?',(character,chat)).fetchone()
 
-def set_anchor(character, chat, reply, prefix):
+def bind_generation(db, character, expected):
+    if expected is None:
+        return
+    db.execute('BEGIN IMMEDIATE')
+    row = db.execute('SELECT value FROM generations WHERE character=?', (character,)).fetchone()
+    if (row[0] if row else 0) != expected:
+        raise SceneError('MEMORY_CHANGED', 'Memory changed during this operation. Retry in a surviving scene.')
+
+def set_anchor(character, chat, reply, prefix, expected=None):
     with closing(db_open()) as db, db:
+        bind_generation(db, character, expected)
         db.execute('INSERT OR REPLACE INTO published VALUES (?,?,?,?)',(character,chat,reply,fingerprint(prefix)))
 
 async def source(user, character, episode_id, current_chat, current_reply):
@@ -115,11 +200,14 @@ async def source_callback(user, character, chat_id, reply, frame):
     except SceneError as error:
         return {'error':{'code':error.code,'message':str(error)}}
 
-async def verify_published_sources(user, character):
+async def verify_published_sources(user, character, selecting=None):
+    await reconcile(field(user, 'id'), character)
     # Alpha fail-closed scan of published sources; bounded datasets only.
     with closing(db_open()) as db:
         anchors = db.execute('SELECT chat,reply,prefix FROM published WHERE character=?',(character,)).fetchall()
     for chat_id, reply, expected in anchors:
+        if chat_id == selecting:
+            continue
         try:
             scoped = await scope(user, chat_id)
         except SceneError:
@@ -127,8 +215,7 @@ async def verify_published_sources(user, character):
         if not scoped or scoped[0] != character:
             raise SceneError('STALE_PUBLISHED_SOURCE',
                 'A memorized chat is no longer available in this private folder. If it still exists, unarchive it if needed, '
-                'return it to the original folder and turn off sharing. If it was deleted, disable Reverie for this folder '
-                'by changing its first default model. v0.1 cannot recover the missing memory source.')
+                'return it to the original folder and turn off sharing. Retry if storage is unavailable.')
         try:
             if fingerprint(played(scoped[1], reply)) == expected:
                 continue
@@ -136,15 +223,17 @@ async def verify_published_sources(user, character):
             pass
         raise SceneError('STALE_PUBLISHED_SOURCE', 'A memorized scene changed. Memorize the selected branch again before playing further.')
 
-def stage(character, chat, reply, prefix, recall):
+def stage(character, chat, reply, prefix, recall, expected=None):
     # Persist structured provenance only, never the assembled model context.
     recall = {key:recall[key] for key in ('at','memories','sources','historicalContext','impressions','sharedHistory') if key in recall}
     with closing(db_open()) as db, db:
+        bind_generation(db, character, expected)
         db.execute('INSERT OR REPLACE INTO pending VALUES (?,?,?,?,?)',
                    (character, chat, reply, prefix, json.dumps(recall)))
 
-def publish(character, chat, reply, prefix):
+def publish(character, chat, reply, prefix, expected=None):
     with closing(db_open()) as db, db:
+        bind_generation(db, character, expected)
         found = db.execute('SELECT value FROM pending WHERE character=? AND chat=? AND reply=? AND prefix=?',
                            (character, chat, reply, fingerprint(prefix[:-1]))).fetchone()
         if found:
