@@ -39,7 +39,7 @@ jobs:
           git diff --check "$(git hash-object -t tree /dev/null)" HEAD
           docker build --network none --tag reverie-openwebui:release \
             --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
-            --label "org.opencontainers.image.version=$RELEASE_TAG" .
+            --label "org.opencontainers.image.version=${RELEASE_TAG#v}" .
       - name: Test before registry writes
         run: |
           docker run --rm --network none --entrypoint python3 \

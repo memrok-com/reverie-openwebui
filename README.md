@@ -119,6 +119,20 @@ successful save. Changed published source branches block further play until
 explicitly memorized again. **What reached this reply?** shows structured recall
 and authorized source titles/dates for a verified completed reply.
 
+**Keep memorized chats in their original private folder.** Archiving, moving,
+sharing, or deleting one pauses Reverie for the whole folder; it does not erase
+Reverie's stored memory. If the chat still exists, unarchive it if needed, move
+the original chat back to that folder, and turn off sharing. Open WebUI does not
+put unarchived chats back in their folders automatically. If you changed the
+saved branch, memorize the intended reply again after returning the chat.
+
+If the chat was deleted, v0.1 cannot recover its source or resume that folder's
+memory. To keep using its remaining chats without Reverie, change the folder's
+first default model to an ordinary model and select an ordinary chat model if
+needed. This does not remove chats or erase the saved Reverie data. To start a
+fresh continuity, enable Reverie in a new private folder; old memory does not
+carry over. Do not edit or delete either database to unblock a folder.
+
 After installation, check package readback success, a completed scene and explicit
 save in an enabled folder, and an ordinary chat outside enabled folders. The
 ordinary chat must receive no memory changes. Switching only the per-chat model
@@ -127,7 +141,8 @@ inside an enabled folder keeps recall enabled but may hide preset Actions.
 Nested/shared folders, attachments, tools, Continue, moved/copied chats, schema
 migration, redating, deletion controls and restore are outside v0.1. Records live
 in the UI data volume; engine databases live in `reverie_data`. Keep both volumes.
-The synthetic demo does not establish real-provider quality or production
+The synthetic demo does not establish real-provider quality, whether memory
+formation fits the adapter's wait limit on your provider, or production
 readiness. Unsent prompts have no completed saved reply or verified provenance;
 a preview or demo transcript is not evidence of an actual save.
 

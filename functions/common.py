@@ -7,9 +7,10 @@ import re
 import sqlite3
 from contextlib import closing
 from datetime import date, datetime, timezone
+from http.client import HTTPException
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from urllib.parse import urlsplit
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from open_webui.models.chats import Chats
 from open_webui.models.folders import Folders
 from open_webui.models.access_grants import AccessGrants
@@ -120,8 +121,16 @@ async def verify_published_sources(user, character):
         anchors = db.execute('SELECT chat,reply,prefix FROM published WHERE character=?',(character,)).fetchall()
     for chat_id, reply, expected in anchors:
         try:
-            result = await source(user, character, chat_id, chat_id, reply)
-            if fingerprint(result['messages']) == expected:
+            scoped = await scope(user, chat_id)
+        except SceneError:
+            scoped = None
+        if not scoped or scoped[0] != character:
+            raise SceneError('STALE_PUBLISHED_SOURCE',
+                'A memorized chat is no longer available in this private folder. If it still exists, unarchive it if needed, '
+                'return it to the original folder and turn off sharing. If it was deleted, disable Reverie for this folder '
+                'by changing its first default model. v0.1 cannot recover the missing memory source.')
+        try:
+            if fingerprint(played(scoped[1], reply)) == expected:
                 continue
         except SceneError:
             pass
@@ -173,7 +182,17 @@ def wire(path, data=None):
         with build_opener(NoRedirect).open(request, timeout=2) as r:
             return json.load(r)
     except (URLError, TimeoutError, ValueError) as e:
-        raise SceneError('REVERIE_UNAVAILABLE', 'Reverie is not available; no memory-free reply was sent. Retry when it is back.') from e
+        if isinstance(e, HTTPError):
+            with closing(e):
+                if e.code == 409 and path == '/jobs' and data is not None:
+                    try:
+                        raw = e.read(1025)
+                        problem = field(json.loads(raw), 'error') if len(raw) <= 1024 else None
+                    except (HTTPException, OSError, ValueError):
+                        problem = None
+                    if field(problem, 'code') == 'CHARACTER_BUSY':
+                        raise SceneError('CHARACTER_BUSY', 'Reverie is busy with another operation. Wait for it to finish and retry.') from None
+        raise SceneError('REVERIE_UNAVAILABLE', 'Reverie is not available; no memory-free reply was sent. Retry when it is back.') from None
 
 async def rpc(character, method, params=None, callback=None):
     start = await asyncio.to_thread(wire, '/jobs', {'character':character,'method':method,'params':params or {}})

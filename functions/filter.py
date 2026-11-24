@@ -44,8 +44,13 @@ class Filter:
                 if source_id in recall['sources']:
                     continue
                 origin = await scope(__user__, source_id)
-                if not origin or origin[0] != character or not anchor(character, source_id):
+                if not origin or origin[0] != character:
                     raise SceneError('INVALID_RECALL', 'The recalled source is no longer available in this private continuity.')
+                if not anchor(character, source_id):
+                    # Open WebUI also logs inlet errors. Use the opaque native path, not the chat title.
+                    path = f' at /c/{source_id}' if re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', source_id) else ''
+                    raise SceneError('INVALID_RECALL',
+                        f'Memory from a chat{path} could not be verified. Open that chat and use Memorize through this reply on the intended reply, then retry.')
                 dated = await rpc(character, 'when', {'episodeId':source_id})
                 if dated['now'] >= episode['now']:
                     raise SceneError('INVALID_RECALL', 'A recalled source is not before this scene’s date.')

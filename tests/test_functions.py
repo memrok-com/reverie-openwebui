@@ -1,12 +1,15 @@
 """Synthetic Function contracts; no installed host or engine required."""
 import asyncio
+import io
 import os
 import sys
 import tempfile
 import types
 import unittest
+from email.message import Message
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
+from urllib.error import HTTPError
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -87,6 +90,90 @@ class FunctionTests(unittest.IsolatedAsyncioTestCase):
             await n['Filter']().inlet(body,{'id':'u'},'c',{'user_message_id':'p','message_id':'new'},event)
         self.assertEqual(n['rpc'].await_count,1)
         self.assertEqual(body['messages'],[{'role':'user','content':'Synthetic harbor'}])
+
+    async def test_unavailable_source_blocks_until_original_is_returned_or_folder_is_disabled(self):
+        n = self.ns
+        user = {'id':'u'}
+        old = types.SimpleNamespace(**vars(self.chat))
+        old.id = 'archived-scene'
+        self.chats.get_chat_by_id_and_user_id.side_effect = lambda cid, uid: (
+            self.chat if cid == 'c' else old if cid == 'archived-scene' else None)
+        character, _ = await n['scope'](user, 'c')
+        prefix = n['played'](old, 'r')
+        n['set_anchor'](character, old.id, 'r', prefix)
+        n['rpc'] = AsyncMock(side_effect=[{'now': 0}, {'text': '', 'historicalText': ''}])
+        filt = n['Filter']()
+        body = {'messages':[{'role':'user','content':'Synthetic harbor'}]}
+        metadata = {'user_message_id':'p','message_id':'new'}
+
+        old.folder_id = None  # Open WebUI clears folder_id on both archive and unarchive.
+        with self.assertRaisesRegex(ValueError, 'unarchive.*original folder'):
+            await filt.inlet(body, user, 'c', metadata, AsyncMock())
+        n['rpc'].assert_not_awaited()
+        self.assertEqual(n['anchor'](character, old.id), ('r', n['fingerprint'](prefix)))
+
+        old.folder_id = self.folder.id
+        self.assertIs(await filt.inlet(body, user, 'c', metadata, AsyncMock()), body)
+        self.assertEqual(n['rpc'].await_count, 2)
+        n['rpc'].reset_mock()
+
+        self.chats.get_chat_by_id_and_user_id.side_effect = lambda cid, uid: self.chat if cid == 'c' else None
+        with self.assertRaisesRegex(ValueError, 'If it was deleted, disable Reverie'):
+            await filt.inlet(body, user, 'c', metadata, AsyncMock())
+        self.folder.data = {'model_ids':['ordinary']}
+        self.assertIs(await filt.inlet(body, user, 'c', metadata, AsyncMock()), body)
+        n['rpc'].assert_not_awaited()
+        self.assertEqual(n['anchor'](character, old.id), ('r', n['fingerprint'](prefix)))
+        self.assertEqual(body, {'messages':[{'role':'user','content':'Synthetic harbor'}]})
+
+    async def test_changed_private_source_keeps_re_memoize_recovery(self):
+        n = self.ns
+        character, _ = await n['scope']({'id':'u'}, 'c')
+        n['set_anchor'](character, 'c', 'r', n['played'](self.chat, 'r'))
+        self.chat.chat['history']['messages']['r']['content'] = 'Edited reply'
+        with self.assertRaisesRegex(n['SceneError'], 'Memorize the selected branch again') as cm:
+            await n['verify_published_sources']({'id':'u'}, character)
+        self.assertEqual(cm.exception.code, 'STALE_PUBLISHED_SOURCE')
+
+    async def test_unanchored_recall_identifies_only_a_scene_in_this_folder(self):
+        n = self.ns
+        other = types.SimpleNamespace(**vars(self.chat))
+        other.id = '11111111-1111-4111-8111-111111111111'
+        other.title = 'Synthetic Compass'
+        self.chats.get_chat_by_id_and_user_id.side_effect = lambda cid, uid: (
+            self.chat if cid == 'c' else other if cid == other.id else None)
+        self.folders.get_folder_by_id_and_user_id.side_effect = lambda fid, uid: (
+            self.folder if fid == 'f' else types.SimpleNamespace(id=fid, user_id=uid, data=self.folder.data))
+        body = {'messages':[{'role':'user','content':'Synthetic harbor'}]}
+        for folder, expected in (('f', f'/c/{other.id}.*Memorize'), ('other', 'no longer available')):
+            other.folder_id = folder
+            n['rpc'] = AsyncMock(side_effect=[{'now': 0}, {'memories':[{'episodeId':other.id}]}])
+            with self.assertRaisesRegex(ValueError, expected) as cm:
+                await n['Filter']().inlet(body, {'id':'u'}, 'c',
+                    {'user_message_id':'p','message_id':'new'}, AsyncMock())
+            self.assertNotIn(other.title, str(cm.exception))
+            if folder != 'f':
+                self.assertNotIn(other.id, str(cm.exception))
+            self.assertEqual(n['rpc'].await_count, 2)
+            self.assertEqual(len(body['messages']), 1)
+
+    async def test_job_start_reports_only_known_conflict_as_busy(self):
+        n = self.ns
+        for path, status, payload, expected in (
+            ('/jobs', 409, b'{"error":{"code":"CHARACTER_BUSY"}}', 'CHARACTER_BUSY'),
+            ('/jobs', 409, b'{"error":{"code":"OTHER"}}', 'REVERIE_UNAVAILABLE'),
+            ('/jobs', 409, b'<not json>', 'REVERIE_UNAVAILABLE'),
+            ('/jobs/abc/callback', 409, b'{"error":{"code":"CHARACTER_BUSY"}}', 'REVERIE_UNAVAILABLE'),
+            ('/jobs', 401, b'{"error":{"code":"CHARACTER_BUSY"}}', 'REVERIE_UNAVAILABLE'),
+        ):
+            with self.subTest(path=path, status=status, payload=payload):
+                opener = Mock()
+                opener.open.side_effect = HTTPError(n['BASE'] + path, status, '', Message(), io.BytesIO(payload))
+                with patch.dict(os.environ, {'REVERIE_ADAPTER_TOKEN':'x'*32}), \
+                        patch.dict(n, {'build_opener':Mock(return_value=opener)}), \
+                        self.assertRaises(n['SceneError']) as cm:
+                    n['wire'](path, {})
+                self.assertEqual(cm.exception.code, expected)
 
     async def test_unsupported_enabled_request_is_refused_before_engine(self):
         n = self.ns
