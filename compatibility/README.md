@@ -1,6 +1,6 @@
 # Open WebUI compatibility probe
 
-This probe checks released artifacts in a disposable Linux/amd64 Docker project. It does not run against a deployed stack. GitHub Actions runs a supported-pair control and an older image that the released installer does not support. The workflow has no schedule, issue writes or deploy step.
+This probe checks released artifacts in a disposable Linux/amd64 Docker project, never a deployed stack. A pull request checks an expected installer refusal twice and verifies the supported-pair control. On `main`, the probe resolves upstream `:latest` once and tests that exact digest against the pinned adapter.
 
 To run the supported control on a disposable Linux Docker host with Python and the Compose plugin:
 
@@ -22,3 +22,10 @@ The probe creates synthetic admin and ordinary accounts, installs the preset, th
 | `2` | Indeterminate: infrastructure, setup, incomplete evidence, or cleanup failed |
 
 `result.json` records artifact identities and the outcome. `evidence.json` includes synthetic identifiers, hashes, and flags, not tokens or transcripts. Only the generated project is cleaned up, including its two disposable volumes. If automatic cleanup fails, use the exact project and manifest in the report on the same host. Never provide live volumes, accounts or credentials.
+
+## Confirmed-pair intake
+
+- Scheduled discovery and issue writing are opt-in (`REVERIE_COMPAT_ARMED`). An incompatible pair needs two matching observations from fresh projects and a passing pinned control with the same adapter image and installer package. An indeterminate result fails the job without filing. An unsupported version is an installer refusal, not evidence of a runtime regression.
+- Only trusted `main` runs may write an issue. The exact UI/adapter pair has one issue across reruns, including closed issues. The machine-generated issue body links the qualifying attempt; use comments for additional engineering findings. Keep the issue even if a notification fails. Compact proof artifacts expire after 90 days; if verification was missed beyond that window, re-qualify the pair before acting on it.
+- `python3 -B -m compatibility.intake scan --state /private/path/intake.sqlite` is a read-only GitHub reconciliation against open issues, exact workflow attempts and their verified proof artifacts. It stores one local receipt per pair and prints only new receipts. Use a private directory; empty output is an idle sweep. The receipt is intake, not investigation, fix approval or deployment.
+- The optional scheduled wake (`REVERIE_WAKE_ENABLED`) requires a `main`-restricted `reverie-compat-wake` GitHub environment and a separately scoped private receiver. Its job does not run candidate code or download probe artifacts; it sends a signed issue number. An accepted wake is not proof of pickup. Disable the wake without disabling issue filing or reconciliation. Neither path promotes or deploys an image.
