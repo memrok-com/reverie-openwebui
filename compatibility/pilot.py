@@ -132,6 +132,11 @@ def main():
               'flow_sha256': hashlib.sha256((ROOT/'demo/flow.json').read_bytes()).hexdigest()}
     started = False
     step = 'docker-preflight'
+
+    def checkpoint(name):
+        nonlocal step
+        step = name
+
     with tempfile.TemporaryDirectory(prefix='reverie-pilot-docker-') as config:
         docker = Docker(Path(config), project, manifest)
         try:
@@ -183,7 +188,8 @@ def main():
                     from .browser import check
                 else:
                     from browser import check
-                evidence = check('http://' + address, PROMPTS, PASSWORD, lambda: docker.inside('collect'))
+                evidence = check('http://' + address, PROMPTS, PASSWORD,
+                                 lambda: docker.inside('collect'), checkpoint)
                 (output/'evidence.json').write_text(json.dumps(evidence, indent=2) + '\n')
                 report['status'], report['check'] = evaluate(evidence)
         except KeyboardInterrupt:

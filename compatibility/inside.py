@@ -3,6 +3,7 @@ import json
 import hashlib
 import sqlite3
 import sys
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 PASSWORD = 'Synthetic-Pilot-Only-9384!'
@@ -30,11 +31,22 @@ def bootstrap():
     version = api('/api/version').get('version')
     if version != '0.13.4':
         return {'status': 'incompatible', 'check': 'unsupported-version', 'version': version}
-    for name in ('admin', 'player'):
-        api('/api/v1/auths/signup', {'name': 'Synthetic ' + name,
-            'email': name + '@pilot.invalid', 'password': PASSWORD})
-    admin = api('/api/v1/auths/signin', {'email': 'admin@pilot.invalid', 'password': PASSWORD})
-    player = api('/api/v1/auths/signin', {'email': 'player@pilot.invalid', 'password': PASSWORD})
+    steps = (
+        ('first-admin-signup', '/api/v1/auths/signup', {'name': 'Synthetic admin', 'email': 'admin@pilot.invalid', 'password': PASSWORD}),
+        ('admin-signin', '/api/v1/auths/signin', {'email': 'admin@pilot.invalid', 'password': PASSWORD}),
+        ('admin-add-player', '/api/v1/auths/add', {'name': 'Synthetic player', 'role': 'user', 'email': 'player@pilot.invalid', 'password': PASSWORD}),
+        ('player-signin', '/api/v1/auths/signin', {'email': 'player@pilot.invalid', 'password': PASSWORD}),
+    )
+    responses = {}
+    for name, path, data in steps:
+        try:
+            # Stock signup closes after the first admin; use authenticated add for
+            # the ordinary account, rather than enabling public signup again.
+            token = responses['admin-signin']['token'] if name == 'admin-add-player' else None
+            responses[name] = api(path, data, token)
+        except HTTPError as error:
+            return {'status': 'indeterminate', 'check': name, 'http_status': error.code}
+    admin, player = responses['admin-signin'], responses['player-signin']
     if admin.get('role') != 'admin' or player.get('role') != 'user':
         return {'status': 'indeterminate', 'check': 'synthetic-account-roles'}
     try:
