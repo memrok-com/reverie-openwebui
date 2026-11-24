@@ -18,12 +18,13 @@ git init -q "$work/source"
 git -C "$work/source" fetch --depth=1 https://github.com/memrok-com/reverie.git "$revision"
 git -C "$work/source" checkout --detach FETCH_HEAD
 [ "$(git -C "$work/source" rev-parse HEAD)" = "$revision" ]
+[ -f "$work/source/engine/Cargo.toml" ] && [ -f "$work/source/engine/Cargo.lock" ]
 mkdir "$work/target"
 container=$(docker create --platform linux/amd64 --memory 4g --memory-swap 4g --cpus 2 --pids-limit 256 \
     --user "$(id -u):$(id -g)" --cap-drop ALL --security-opt no-new-privileges:true \
     --mount "type=bind,src=$work/source,dst=/src,readonly" \
     --mount "type=bind,src=$work/target,dst=/target" \
-    --workdir /src --env CARGO_TARGET_DIR=/target --env CARGO_HOME=/target/cargo --env CARGO_BUILD_JOBS=2 \
+    --workdir /src/engine --env CARGO_TARGET_DIR=/target --env CARGO_HOME=/target/cargo --env CARGO_BUILD_JOBS=2 \
     --env RUSTUP_TOOLCHAIN=1.99.1 "$builder" \
     cargo build --locked --release --bin reverie-engine)
 docker start -a "$container"
