@@ -1,4 +1,5 @@
 import copy
+from contextlib import closing
 from dataclasses import asdict
 import io
 import json
@@ -133,22 +134,38 @@ class IntakeTest(unittest.TestCase):
             self.api.items[11]['user']['id'] = i.BOT_ID
             self.assertEqual([x['issue'] for x in i.scan(self.api, state)], [11])
 
-    def test_missed_wake_and_concurrent_replay_survive_new_connections(self):
+    def test_interrupted_handoff_retries_until_ack_and_then_stays_quiet(self):
         i.file_issue(self.api, self.record, self.source)
         with tempfile.TemporaryDirectory() as d:
             state = Path(d)/'ledger.sqlite'
-            # A scheduled sweep sees the issue even when there was no wake.
-            self.assertEqual([x['issue'] for x in i.scan(self.api, state)], [11])
-            self.assertEqual(i.scan(self.api, state, issue=11), [])
+            first = i.scan(self.api, state)
+            self.assertEqual([x['issue'] for x in first], [11])
+            # No triage acknowledgment: a new process must see the same work.
+            self.assertEqual(i.scan(self.api, state), first)
+            self.api.items[11]['title'] += ' tampered'
+            self.assertEqual(i.scan(self.api, state), [])
+            self.api.items[11]['title'] = i.title(self.record)
+            with self.assertRaisesRegex(i.IntakeError, 'unknown-intake-issue'):
+                i.acknowledge(state, 42)
+            with ThreadPoolExecutor(max_workers=2) as workers:
+                self.assertEqual(sorted(workers.map(lambda _: i.acknowledge(state, 11), range(2))), [False, True])
+            self.assertEqual(i.scan(self.api, state), [])
             second = i.Source(124, 1, 'a' * 40, 'schedule')
             self.api.evidence[second] = i.Pair(D('d'), i.ADAPTER_DIGEST, 'unsupported-version')
             i.file_issue(self.api, self.api.evidence[second], second)
             with ThreadPoolExecutor(max_workers=2) as workers:
-                results = list(workers.map(lambda hint: i.scan(self.api, state, issue=hint), [12, None]))
-            self.assertEqual([x['issue'] for batch in results for x in batch], [12])
-            with sqlite3.connect(state) as db:
+                results = list(workers.map(lambda _: i.scan(self.api, state), range(2)))
+            self.assertEqual([[x['issue'] for x in batch] for batch in results], [[12], [12]])
+            with closing(sqlite3.connect(state)) as db:
                 self.assertEqual(db.execute('select count(*) from intake').fetchone()[0], 2)
             self.assertEqual(state.stat().st_mode & 0o777, 0o600)
+
+    def test_no_ledger_is_created_when_acknowledging_unknown_work(self):
+        with tempfile.TemporaryDirectory() as d:
+            state = Path(d)/'ledger.sqlite'
+            with self.assertRaisesRegex(i.IntakeError, 'unknown-intake-issue'):
+                i.acknowledge(state, 11)
+            self.assertFalse(state.exists())
 
     def test_filing_context_refuses_untrusted_ref_or_unarmed(self):
         env = dict(GITHUB_ACTIONS='true', GITHUB_REPOSITORY=i.REPO, GITHUB_REPOSITORY_ID=str(i.REPO_ID),
@@ -177,13 +194,6 @@ class IntakeTest(unittest.TestCase):
             i.file_issue(self.api, self.record, self.source)
         self.assertEqual(self.api.posts, 2)
 
-    def test_hint_only_accepts_an_exact_issue_id(self):
-        self.assertEqual(i.hint(json.dumps({'issue': 42})), 42)
-        for payload in [{'issue': True}, {'issue': 0}, {'issue': '42'}, {'issue': 42, 'text': 'x'}]:
-            with self.assertRaises(i.IntakeError):
-                i.hint(json.dumps(payload))
-        with self.assertRaises(i.IntakeError):
-            i.hint('{"issue":42,"issue":43}')
 
     def test_exact_proof_is_required_for_intake_and_issue_creation(self):
         i.file_issue(self.api, self.record, self.source)

@@ -112,15 +112,12 @@ jobs:
       actions: read
       contents: read
       issues: write
-    outputs:
-      issue: ${{ steps.publish.outputs.issue }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Create or find the exact-pair issue
-        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
           PROOF: ${{ needs.latest.outputs.proof }}
@@ -131,87 +128,5 @@ jobs:
           number=$(printf '%s' "$PROOF" | python3 -B -m compatibility.intake file)
           if [[ -n "$number" ]]; then
             [[ "$number" =~ ^[1-9][0-9]{0,15}$ ]]
-            printf 'issue=%s\n' "$number" >> "$GITHUB_OUTPUT"
+            printf 'Created and verified issue #%s\n' "$number"
           fi
-
-  wake:
-    name: Notify private intake
-    needs: file-issue
-    if: >-
-      github.repository_id == '1469823243' && github.ref == 'refs/heads/main' && github.event_name == 'schedule' &&
-      vars.REVERIE_WAKE_ENABLED == 'true' && needs.file-issue.outputs.issue != ''
-    environment: reverie-compat-wake
-    runs-on: ubuntu-24.04
-    timeout-minutes: 4
-    permissions:
-      id-token: write
-    steps:
-      - name: Send a signed issue ID over the private route
-        env:
-          CLIENT_ID: ${{ vars.REVERIE_WAKE_CLIENT_ID }}
-          WAKE_HOST: ${{ vars.REVERIE_WAKE_HOST }}
-          WAKE_SECRET: ${{ secrets.REVERIE_WAKE_SIGNING_KEY }}
-          ISSUE: ${{ needs.file-issue.outputs.issue }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          umask 077
-          [[ "$ISSUE" =~ ^[1-9][0-9]{0,15}$ ]]
-          [[ "$CLIENT_ID" =~ ^[A-Za-z0-9_-]+$ && -n "$WAKE_SECRET" ]]
-          d=$(mktemp -d "$RUNNER_TEMP/reverie-tailnet.XXXXXXXX")
-          bin="$d/tailscale_1.104.4_amd64"
-          export TS_BIN="$bin/tailscale" TS_SOCKET="$d/tailscaled.sock"
-          cleanup() {
-            rc=$?
-            if [[ -S "$TS_SOCKET" ]]; then
-              sudo "$TS_BIN" --socket="$TS_SOCKET" logout >/dev/null 2>&1 || rc=1
-            fi
-            if [[ -n "${daemon:-}" ]]; then sudo kill "$daemon" >/dev/null 2>&1 || true; fi
-            sudo rm -rf -- "$d"
-            exit "$rc"
-          }
-          trap cleanup EXIT
-          curl -fsS --proto '=https' --max-time 35 https://pkgs.tailscale.com/stable/tailscale_1.104.4_amd64.tgz -o "$d/tailscale.tgz"
-          printf '%s  %s\n' 624ea093d47d62cf56f17b8332d74b8decda4a1faa610ebc60a1de334b2b3dc9 "$d/tailscale.tgz" | sha256sum --status -c
-          tar -xzf "$d/tailscale.tgz" -C "$d" -- tailscale_1.104.4_amd64/tailscale tailscale_1.104.4_amd64/tailscaled
-          sudo "$bin/tailscaled" --socket="$TS_SOCKET" --state=mem: --tun=tailscale0 >"$d/daemon.log" 2>&1 &
-          daemon=$!
-          for attempt in {1..30}; do
-            [[ ! -S "$TS_SOCKET" ]] || break
-            sleep .2
-          done
-          [[ -S "$TS_SOCKET" ]]
-          sudo --preserve-env=ACTIONS_ID_TOKEN_REQUEST_URL,ACTIONS_ID_TOKEN_REQUEST_TOKEN \
-            "$TS_BIN" --socket="$TS_SOCKET" up --client-id="${CLIENT_ID}?ephemeral=true" \
-            --audience="api.tailscale.com/${CLIENT_ID}" --hostname="reverie-wake-${GITHUB_RUN_ID}" \
-            --advertise-tags=tag:reverie-wake --timeout=45s --shields-up --accept-routes=false --accept-dns=false \
-            >"$d/up.log" 2>&1 || { printf 'Private runner enrollment failed\n'; exit 1; }
-          python3 - <<'PY'
-          import hmac, http.client, ipaddress, json, os, subprocess
-
-          address = ipaddress.IPv4Address(os.environ['WAKE_HOST'])
-          if address not in ipaddress.IPv4Network('100.64.0.0/10'):
-              raise SystemExit('Wake target must be a tailnet IPv4 address')
-          cli = ['sudo', os.environ['TS_BIN'], '--socket=' + os.environ['TS_SOCKET']]
-          prefs = json.loads(subprocess.check_output([*cli, 'debug', 'prefs'], timeout=8))
-          status = json.loads(subprocess.check_output([*cli, 'status', '--peers=false', '--json'], timeout=8))
-          if (prefs['RouteAll'] is not False or prefs['CorpDNS'] is not False or prefs['ShieldsUp'] is not True
-                  or prefs['ExitNodeID'] or prefs['AdvertiseRoutes'] or status['BackendState'] != 'Running'
-                  or status['Self']['Tags'] != ['tag:reverie-wake']):
-              raise SystemExit('Private runner state did not match policy')
-          issue = int(os.environ['ISSUE'])
-          body = json.dumps({'issue': issue}, separators=(',', ':')).encode()
-          signature = hmac.digest(os.environ.pop('WAKE_SECRET').encode(), body, 'sha256').hex()
-          conn = http.client.HTTPConnection(str(address), 18644, timeout=12)
-          try:
-              conn.request('POST', '/webhooks/reverie-compatibility', body, {
-                  'Content-Type': 'application/json', 'X-GitHub-Event': 'reverie-compatibility',
-                  'X-GitHub-Delivery': f'reverie-issue-{issue}', 'X-Hub-Signature-256': 'sha256=' + signature})
-              response = conn.getresponse()
-              expected = {202: 'accepted', 200: 'duplicate'}
-              if response.status not in expected or json.loads(response.read(4096)).get('status') != expected[response.status]:
-                  raise SystemExit('Private wake was not admitted; scheduled reconciliation remains independent')
-              print('Private wake admitted (not pickup confirmation)')
-          finally:
-              conn.close()
-          PY

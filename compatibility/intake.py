@@ -79,13 +79,6 @@ def object_json(data, max_size=8192):
     raise IntakeError('invalid-json-object')
 
 
-def hint(data):
-    fields = object_json(data, 128)
-    if set(fields) != {'issue'} or not positive(fields['issue']):
-        raise IntakeError('invalid-issue-hint')
-    return fields['issue']
-
-
 @dataclass(frozen=True)
 class Pair:
     ui: str
@@ -285,19 +278,20 @@ def ledger(state):
 
 
 TABLE = ('CREATE TABLE IF NOT EXISTS intake (ui TEXT, adapter TEXT, issue INTEGER UNIQUE NOT NULL, '
-         'receipt TEXT NOT NULL, PRIMARY KEY (ui, adapter))')
+         'receipt TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0 CHECK (acknowledged IN (0, 1)), '
+         'PRIMARY KEY (ui, adapter))')
 
 
 def matches_receipt(db, item):
-    seen = db.execute('SELECT receipt FROM intake WHERE (ui = ? AND adapter = ?) OR issue = ?',
+    seen = db.execute('SELECT receipt, acknowledged FROM intake WHERE (ui = ? AND adapter = ?) OR issue = ?',
                       (item['ui'], item['adapter'], item['issue'])).fetchall()
     receipt = json.dumps(item, sort_keys=True, separators=(',', ':'))
-    if seen and seen != [(receipt,)]:
+    if seen and (len(seen) != 1 or seen[0][0] != receipt):
         raise IntakeError('conflicting-intake-receipt')
-    return bool(seen), receipt
+    return seen[0][1] if seen else None, receipt
 
 
-def claim(state, rows):
+def pending(state, rows):
     if not rows:
         return []
     # Deliberately no GitHub I/O while holding the write transaction.
@@ -306,43 +300,62 @@ def claim(state, rows):
         db.execute(TABLE)
         db.execute('BEGIN IMMEDIATE')
         for item in rows:
-            existing, receipt = matches_receipt(db, item)
-            if existing:
-                continue
-            db.execute('INSERT INTO intake VALUES (?, ?, ?, ?)', (item['ui'], item['adapter'], item['issue'], receipt))
-            out.append(item)
+            acknowledged, receipt = matches_receipt(db, item)
+            if acknowledged is None:
+                db.execute('INSERT INTO intake (ui, adapter, issue, receipt) VALUES (?, ?, ?, ?)',
+                           (item['ui'], item['adapter'], item['issue'], receipt))
+            if acknowledged != 1:
+                out.append(item)
     return out
 
 
-def scan(api, state, issue=None):
-    rows = [api.issue(issue)] if issue is not None else api.issues('open')
+def acknowledge(state, issue):
+    if not positive(issue) or not state.exists():
+        raise IntakeError('unknown-intake-issue')
+    with closing(ledger(state)) as db, db:
+        db.execute(TABLE)
+        db.execute('BEGIN IMMEDIATE')
+        row = db.execute('SELECT acknowledged FROM intake WHERE issue = ?', (issue,)).fetchone()
+        if row is None:
+            raise IntakeError('unknown-intake-issue')
+        if row[0]:
+            return False
+        db.execute('UPDATE intake SET acknowledged = 1 WHERE issue = ?', (issue,))
+        return True
+
+
+def scan(api, state):
+    rows = api.issues('open')
     normalized = []
     seen = set()
     for stub in rows:
         try:
             ref = parse(stub)
-            if ref is None:
-                continue
-            n = stub['number']
-            row = api.issue(n) if issue is None else stub
-            if (row.get('number') != n or (issue is not None and n != issue)
-                    or row.get('state') != 'open' or row.get('id') != stub.get('id') or parse(row) != ref):
-                continue
         except IntakeError:
             continue  # Edited/malformed records are never agent input.
+        if ref is None:
+            continue
+        n = stub['number']
+        row = api.issue(n)
+        try:
+            if (row.get('number') != n or row.get('state') != 'open'
+                    or row.get('id') != stub.get('id') or parse(row) != ref):
+                continue
+        except IntakeError:
+            continue
         pair, source = ref
         if pair.key in seen:
             raise IntakeError('duplicate-pair-issues')
         seen.add(pair.key)
         row = {'issue': n, 'issue_id': row['id'], **asdict(pair), **asdict(source)}
+        acknowledged = None
         if state.exists():
             with closing(ledger(state)) as db, db:
                 db.execute(TABLE)
-                if matches_receipt(db, row)[0]:
-                    continue
-        if verified(api, pair, source):
+                acknowledged, _ = matches_receipt(db, row)
+        if acknowledged == 0 or (acknowledged is None and verified(api, pair, source)):
             normalized.append(row)
-    return claim(state, normalized)
+    return pending(state, normalized)
 
 
 class GitHub:
@@ -425,10 +438,12 @@ def main():
     for field in ('first', 'repeat', 'control'):
         q.add_argument('--' + field, type=Path, required=True)
     cmds.add_parser('file')
-    cmds.add_parser('hint')
     s = cmds.add_parser('scan')
     s.add_argument('--state', required=True, type=Path)
-    s.add_argument('--issue', type=int)
+    s.add_argument('--gate', action='store_true', help='Emit a Hermes pre-run gate envelope.')
+    a = cmds.add_parser('ack')
+    a.add_argument('--state', required=True, type=Path)
+    a.add_argument('--issue', required=True, type=int)
     args = p.parse_args()
     try:
         if args.cmd == 'qualify':
@@ -441,14 +456,14 @@ def main():
             number = file_issue(GitHub(), pair, source)
             if number:
                 print(number)
-        elif args.cmd == 'hint':
-            print(json.dumps({'issue': hint(sys.stdin.buffer.read(129))}))
         elif args.cmd == 'scan':
-            if args.issue is not None and not positive(args.issue):
-                raise IntakeError('invalid-issue-hint')
-            rows = scan(GitHub(), args.state, args.issue)
-            if rows:
+            rows = scan(GitHub(), args.state)
+            if args.gate:
+                print(json.dumps({'wakeAgent': bool(rows), 'issues': rows}, separators=(',', ':')))
+            elif rows:
                 print(json.dumps(rows, separators=(',', ':')))
+        elif args.cmd == 'ack':
+            print('acknowledged' if acknowledge(args.state, args.issue) else 'already acknowledged')
     except IntakeError as e:
         print(f'intake: {e}', file=sys.stderr)
         return 1
