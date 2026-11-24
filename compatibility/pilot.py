@@ -205,8 +205,9 @@ def main():
                     from .browser import check
                 else:
                     from browser import check
+                diagnostic = report['browser_diagnostic'] = {}
                 evidence = check(base, PROMPTS, PASSWORD,
-                                 lambda: docker.inside('collect'), checkpoint)
+                                 lambda: docker.inside('collect'), checkpoint, diagnostic)
                 (output/'evidence.json').write_text(json.dumps(evidence, indent=2) + '\n')
                 report['status'], report['check'] = evaluate(evidence)
         except KeyboardInterrupt:

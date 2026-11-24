@@ -7,12 +7,13 @@ from urllib.request import Request, urlopen
 from playwright.sync_api import expect, sync_playwright
 
 
-def check(base, prompts, password, collect, checkpoint):
-    def api(path, data, token=None):
+def check(base, prompts, password, collect, checkpoint, diagnostic):
+    def api(path, data=None, token=None):
         headers = {'Content-Type': 'application/json'}
         if token:
             headers['Authorization'] = 'Bearer ' + token
-        with urlopen(Request(base + path, json.dumps(data).encode(), headers), timeout=10) as response:
+        body = None if data is None else json.dumps(data).encode()
+        with urlopen(Request(base + path, body, headers), timeout=10) as response:
             return json.load(response)
 
     checkpoint('browser-player-signin')
@@ -23,6 +24,14 @@ def check(base, prompts, password, collect, checkpoint):
                  'data': {'model_ids': ['reverie-companion']}}, token)
     if folder['data']['model_ids'] != ['reverie-companion']:
         raise RuntimeError('folder-model-not-saved')
+    checkpoint('browser-player-model-inventory')
+    models = api('/api/models', token=token)['data']
+    diagnostic.update(
+        player_ordinary_model=any(m.get('id') == 'synthetic-companion' for m in models),
+        player_ordinary_name=any(m.get('id') == 'synthetic-companion'
+                                 and m.get('name') == 'synthetic-companion' for m in models),
+        player_reverie_model=any(m.get('id') == 'reverie-companion' for m in models),
+    )
 
     def turn(page, prompt, date=None):
         editor = page.locator('#chat-input')
@@ -50,11 +59,13 @@ def check(base, prompts, password, collect, checkpoint):
             ordinary = context.new_page()
             ordinary.goto(base + '/', wait_until='domcontentloaded')
             expect(ordinary.locator('#chat-input')).to_be_visible(timeout=18000)
-            checkpoint('browser-ordinary-model')
+            checkpoint('browser-ordinary-picker')
             picker = ordinary.get_by_role('button', name='Selected model: synthetic-companion')
             if not picker.is_visible():
                 ordinary.locator('#model-selector-model-button').click()
+                checkpoint('browser-ordinary-option')
                 ordinary.get_by_text('synthetic-companion', exact=True).last.click()
+                checkpoint('browser-ordinary-selection')
                 expect(picker).to_be_visible()
             checkpoint('browser-ordinary-turn')
             turn(ordinary, prompts['ordinary'])
