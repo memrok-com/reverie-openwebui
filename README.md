@@ -18,7 +18,9 @@ Give a roleplay character a memory across saved chats. A private folder holds on
 
 ## Alpha limits
 
-Scenes are plain text, dates are fixed per chat, and memorizing is manual. Keep memorized chats private and in their original folder: archiving, moving, or sharing one can pause memory. Deleting a scene can invalidate later memory without changing old replies. Account deletion can leave residual memory if cleanup fails; this is not an assured-erasure setup.
+Scenes are plain text, dates are fixed per chat, and memorizing is manual. If you edit or replace a memorized branch, play can pause until you memorize the desired reply again. Keep memorized chats private and in their original folder: archiving, moving, or sharing one can also pause memory.
+
+Deleting a scene can invalidate later memory without changing old replies. Account deletion can leave residual memory if cleanup fails; this is not an assured-erasure setup.
 
 There is no migration or restore tool, or automatic repair of a partial install. See [deletion and recovery](docs/install.md#scene-deletion-and-recovery) or [disable without losing data](docs/install.md#disable-without-deleting-data).
 

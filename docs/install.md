@@ -83,6 +83,8 @@ Set `BASE_MODEL_ID` and `USER_ID` in your shell to the IDs from the prerequisite
 
 Success says `Created and verified four Functions, active Event, global Filter and Reverie Companion preset.` The installer checks the UI version, base model, and ID conflicts before writing. Creation is not atomic. If it fails, inspect any partial state in native Admin Functions and model administration before making changes; rerunning does not repair it.
 
+To add another player, open **Access Control** for **Reverie Companion** in Open WebUI's model editor and grant that user read access. They also need access to the base model. Keep the preset private; do not rerun the installer.
+
 ## 3. Check your setup
 
 As the granted user, follow [Try two scenes](../README.md#try-two-scenes). If you cancel the date prompt, use **Try Again** on the saved prompt. Then send a plain-text prompt in an ordinary chat outside the enabled folder: expect no date prompt or Reverie memory. Within an enabled folder, changing the chat's model keeps recall active but may hide the preset's reply Actions. A failed reflection is not a saved memory; an unchanged successful repeat reports already memorized.
