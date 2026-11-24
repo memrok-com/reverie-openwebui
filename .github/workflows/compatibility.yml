@@ -1,0 +1,49 @@
+name: Open WebUI compatibility probe
+on:
+  pull_request:
+    paths:
+      - 'compatibility/**'
+      - 'demo/**'
+      - 'tests/test_compatibility.py'
+      - '.github/workflows/compatibility.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: supported
+            digest: sha256:d6c085678f7e3f474aa2a92ac9831cb68759dcfd951de250ebbb37dac5cd0255
+            exit_code: '0'
+          - case: unsupported-installer-version
+            digest: sha256:46b59158e6558eeb980bc828e0f1b30238ad24d82ed84d5e5eda1dab2a082f14
+            exit_code: '1'
+    name: Probe (${{ matrix.case }})
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install headless browser
+        if: matrix.case == 'supported'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/compat-venv"
+          "$RUNNER_TEMP/compat-venv/bin/pip" install 'playwright==1.65.2'
+          "$RUNNER_TEMP/compat-venv/bin/python" -m playwright install --with-deps chromium
+      - name: Exercise and check result
+        env:
+          UI_DIGEST: ${{ matrix.digest }}
+          EXPECTED_EXIT: ${{ matrix.exit_code }}
+        run: |
+          python=python3
+          if [[ -x "$RUNNER_TEMP/compat-venv/bin/python" ]]; then
+            python="$RUNNER_TEMP/compat-venv/bin/python"
+          fi
+          actual=0
+          env -i HOME="$HOME" PATH="$PATH" LANG=C.UTF-8 \
+            "$python" -B compatibility/pilot.py --ui-digest "$UI_DIGEST" --output "$RUNNER_TEMP/compat-result" || actual=$?
+          test "$actual" = "$EXPECTED_EXIT"
