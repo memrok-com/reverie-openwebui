@@ -1,6 +1,6 @@
 # Open WebUI compatibility probe
 
-This probe checks released artifacts in a disposable Linux/amd64 Docker project, never a deployed stack. A pull request checks an expected installer refusal twice and verifies the supported-pair control. On `main`, the probe resolves upstream `:latest` once and tests that exact digest against the pinned adapter.
+This probe checks released artifacts in a disposable Linux/amd64 Docker project, never a deployed stack. A pull request checks an expected installer refusal twice and verifies the supported-pair control. On `main`, scheduled and no-input manual runs resolve upstream `:latest` once and test that exact digest against the pinned adapter. Pinned manual runs test the supplied digest instead.
 
 To run the supported control on a disposable Linux Docker host with Python and the Compose plugin:
 
@@ -22,6 +22,29 @@ The probe creates synthetic admin and ordinary accounts, installs the preset, th
 | `2` | Indeterminate: infrastructure, setup, incomplete evidence, or cleanup failed |
 
 `result.json` records artifact identities and the outcome. `evidence.json` includes synthetic identifiers, hashes, and flags, not tokens or transcripts. Only the generated project is cleaned up, including its two disposable volumes. If automatic cleanup fails, use the exact project and manifest in the report on the same host. Never provide live volumes, accounts or credentials.
+
+## Digest-bound report dispatch
+
+The Actions workflow accepts two optional string inputs, required together for pinned testing:
+
+- `ui_digest`: exactly `sha256:[a-f0-9]{64}` (full match), always in `ghcr.io/open-webui/open-webui`. Tags, repository names, uppercase hex and whitespace are rejected.
+- `correlation`: exactly `[a-f0-9]{32,64}` (full match). Generate a fresh nonce per intended dispatch and reuse it when reconciling an ambiguous dispatch response.
+
+The exact pinned run name is `compatibility-report-<correlation>`; the fixed prefix is `compatibility-report-`. Correlation is Actions run metadata, not a field in the report. Reconcile by the exact run name together with repository, workflow, dispatch event, branch and commit; multiple matching runs remain ambiguous. A rerun shares the run name but has its own attempt artifact. Invalid inputs fail before image resolution or probing and never fall back to latest or the refusal fixture.
+
+Pinned dispatches are accepted on branches in the canonical repository, including `main`. A PR branch may be selected for review by dispatching that branch explicitly; this does not change the `pull_request` fixture. The probe job has only `contents: read`, checkout persists no credentials, and the issue writer is excluded whenever either input is present, independently of `REVERIE_COMPAT_ARMED`. There is no publishing, promotion or deployment. A branch report is review evidence, not a main-branch attestation.
+
+Pinned testing uses only the supplied immutable candidate digest, the pinned adapter and supported control; it never resolves `:latest`. A determinate result uploads only `report.json` in `compatibility-report-${{ github.run_attempt }}` (90-day retention). The exact schema is:
+
+```json
+{"schema":1,"ui_digest":"sha256:<64 lowercase hex>","adapter_digest":"sha256:<64 lowercase hex>","installer":"supported","runtime":"pass","check":"tested/pass"}
+```
+
+`installer` is `supported` or `unsupported-version`. `runtime` is `pass`, `failed`, or `not-tested`. `check` is `tested/pass` for success, otherwise an existing `compatibility/intake.py` `FINDINGS` code. An unsupported version is precisely `installer=unsupported-version`, `runtime=not-tested`, `check=unsupported-version`: the released installer's gate refused installation; runtime compatibility is unknown and the gate is never bypassed. `released-installer-readback` means the version gate accepted the version but installation verification failed (`supported`, `not-tested`). Journey failures use `supported`, `failed` with the matching check code.
+
+Success requires a validated pilot result with pinned image identities, ready bootstrap, the synthetic journey pass check and completed cleanup. Every negative report uses the existing qualifier: two matching observations from distinct projects and a green supported control, with matching adapter image and installer package evidence. Missing or mismatched evidence, a failing supported baseline, probe/setup errors and cleanup failures are indeterminate: the job fails and emits no verdict artifact. Reports cover synthetic fresh installs only.
+
+No-input manual dispatches, PR fixtures, opt-in scheduled discovery, and legacy proof artifacts and issue intake retain their existing behavior. Report artifacts are separate from legacy `compatibility-proof-<attempt>` artifacts and are never issue-writing proof.
 
 ## Confirmed-pair intake
 
