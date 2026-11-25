@@ -1,4 +1,5 @@
 name: Open WebUI compatibility probe
+run-name: ${{ inputs.correlation != '' && format('compatibility-report-{0}', inputs.correlation) || 'Open WebUI compatibility probe' }}
 on:
   pull_request:
     paths:
@@ -9,6 +10,15 @@ on:
   schedule:
     - cron: '37 4 * * *'
   workflow_dispatch:
+    inputs:
+      ui_digest:
+        description: 'Pinned Open WebUI digest: sha256 followed by 64 lowercase hex digits (with colon)'
+        required: false
+        type: string
+      correlation:
+        description: 'Pinned dispatch nonce: 32 to 64 lowercase hex digits; requires ui_digest'
+        required: false
+        type: string
 permissions: {}
 jobs:
   latest:
@@ -27,12 +37,28 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Resolve the candidate digest
-        id: image
+      - name: Validate dispatch inputs before probing
+        id: mode
+        env:
+          INPUT_UI_DIGEST: ${{ inputs.ui_digest }}
+          INPUT_CORRELATION: ${{ inputs.correlation }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_REF" == refs/heads/main && "$GITHUB_EVENT_NAME" != pull_request ]]; then
+          mode=$(python3 -B -m compatibility.report dispatch)
+          printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
+      - name: Resolve the candidate digest
+        id: image
+        env:
+          DISPATCH_MODE: ${{ steps.mode.outputs.mode }}
+          INPUT_UI_DIGEST: ${{ inputs.ui_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$DISPATCH_MODE" == pinned ]]; then
+            digest=$INPUT_UI_DIGEST
+            kind=report
+          elif [[ "$GITHUB_REF" == refs/heads/main && "$GITHUB_EVENT_NAME" != pull_request ]]; then
             digest=$(docker buildx imagetools inspect ghcr.io/open-webui/open-webui:latest --format '{{.Manifest.Digest}}')
             kind=proof
           else
@@ -66,7 +92,12 @@ jobs:
           first=0
           probe "$UI_DIGEST" first || first=$?
           case "$first" in
-            0) [[ "$PROBE_KIND" == proof ]] || { printf 'Expected fixture refusal did not occur\n'; exit 1; }
+            0) [[ "$PROBE_KIND" == proof || "$PROBE_KIND" == report ]] || { printf 'Expected fixture refusal did not occur\n'; exit 1; }
+               if [[ "$PROBE_KIND" == report ]]; then
+                 report=$(python3 -B -m compatibility.report report --candidate "$UI_DIGEST" --first "$d/first/result.json")
+                 mkdir "$RUNNER_TEMP/compatibility-report"
+                 printf '%s\n' "$report" > "$RUNNER_TEMP/compatibility-report/report.json"
+               fi
                printf '%s: tested/pass (fresh install only)\n' "$UI_DIGEST"; exit 0 ;;
             1) ;;
             *) printf '%s: indeterminate; no issue\n' "$UI_DIGEST"; exit 1 ;;
@@ -79,6 +110,14 @@ jobs:
             printf '%s: indeterminate; no matching repeat and green control\n' "$UI_DIGEST"
             exit 1
           fi
+          if [[ "$PROBE_KIND" == report ]]; then
+            report=$(python3 -B -m compatibility.report report --candidate "$UI_DIGEST" \
+              --first "$d/first/result.json" --repeat "$d/repeat/result.json" --control "$d/control/result.json")
+            umask 077
+            mkdir "$RUNNER_TEMP/compatibility-report"
+            printf '%s\n' "$report" > "$RUNNER_TEMP/compatibility-report/report.json"
+            exit 0
+          fi
           proof=$(python3 -B -m compatibility.intake qualify --candidate "$UI_DIGEST" \
             --first "$d/first/result.json" --repeat "$d/repeat/result.json" --control "$d/control/result.json")
           [[ -n "$proof" ]] || { printf 'Indeterminate observations; no issue\n'; exit 1; }
@@ -87,6 +126,14 @@ jobs:
           printf '%s\n' "$proof" > "$RUNNER_TEMP/compatibility-confirmed/proof.json"
           printf 'proof=%s\n' "$proof" >> "$GITHUB_OUTPUT"
           printf '%s: confirmed incompatible (fresh install only)\n' "$UI_DIGEST"
+      - name: Publish determinate pinned report
+        if: success() && steps.image.outputs.kind == 'report'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: compatibility-report-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/compatibility-report/report.json
+          if-no-files-found: error
+          retention-days: 90
       - name: Publish narrow proof
         if: steps.qualify.outputs.proof != ''
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
@@ -102,6 +149,7 @@ jobs:
     if: >-
       github.repository_id == '1469823243' && github.ref == 'refs/heads/main' &&
       (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      inputs.ui_digest == '' && inputs.correlation == '' &&
       vars.REVERIE_COMPAT_ARMED == 'true' && needs.latest.outputs.proof != ''
     concurrency:
       group: reverie-compatibility-issue-writer
