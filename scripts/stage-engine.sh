@@ -1,7 +1,7 @@
 #!/bin/sh
 # CI-only native Linux amd64 build; runtime images never fetch or compile.
 set -eu
-revision=795646df94f3d16be549107f47ca134abd1d9486
+revision=ca969c4e64bae35f9d1ea92df53535be85a6658e
 builder=docker.io/library/rust:1.99.1-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c
 [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ]
 [ "$(docker info --format '{{.Architecture}}')" = x86_64 ]

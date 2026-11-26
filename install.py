@@ -8,7 +8,7 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 ROOT = Path(__file__).resolve().parent
 UI_IMAGE = 'ghcr.io/open-webui/open-webui@sha256:0c4439e78c24c85e3e7a41936771d3b02f0df38daf28a086cd83ca74804f7676'
-ENGINE_REVISION = '795646df94f3d16be549107f47ca134abd1d9486'
+ENGINE_REVISION = 'ca969c4e64bae35f9d1ea92df53535be85a6658e'
 BUNDLE_VERSION = '0.1.1'
 
 class InstallError(Exception):
