@@ -1,5 +1,9 @@
 # Install and operate Reverie
 
+This guide targets v0.1.1. If that image is not available yet, follow the
+[v0.1.0 guide](https://github.com/memrok-com/reverie-openwebui/blob/v0.1.0/docs/install.md).
+Existing v0.1.0 installs should use [the single-Action upgrade](#add-the-chat-memory-view-to-an-existing-v010-install), not `apply`.
+
 ## Before you start
 
 - Use an existing **stock Open WebUI 0.13.4** Compose deployment on **Linux amd64**. Back up its data using your existing procedure. This is a clean add-on install: existing chats are fine; existing Reverie Functions or a preset from a preview are not. There is no migration, overwrite, or restore tool in v0.1.
@@ -34,7 +38,7 @@ services:
       REVERIE_REFLECTION_API_KEY: ${REVERIE_REFLECTION_API_KEY:-}
     networks: [default, reverie_internal]
   reverie:
-    image: ghcr.io/memrok-com/reverie-openwebui:v0.1.0
+    image: ghcr.io/memrok-com/reverie-openwebui:v0.1.1
     environment:
       REVERIE_ADAPTER_TOKEN: ${REVERIE_ADAPTER_TOKEN:?Supply runtime adapter token}
     user: '10001:10001'
@@ -81,9 +85,52 @@ Set `BASE_MODEL_ID` and `USER_ID` in your shell to the IDs from the prerequisite
 )
 ```
 
-Success says `Created and verified four Functions, active Event, global Filter and Reverie Companion preset.` The installer checks the UI version, base model, and ID conflicts before writing. Creation is not atomic. If it fails, inspect any partial state in native Admin Functions and model administration before making changes; rerunning does not repair it.
+Success says `Created and verified five Functions, active Event, global Filter and Reverie Companion preset.` The installer checks the UI version, base model, and ID conflicts before writing. Creation is not atomic. If it fails, inspect any partial state in native Admin Functions and model administration before making changes; rerunning does not repair it.
 
 To add another player, open **Access Control** for **Reverie Companion** in Open WebUI's model editor and grant that user read access. They also need access to the base model. Keep the preset private; do not rerun the installer.
+
+## Add the chat memory view to an existing v0.1.0 install
+
+This is a native addition of one Function and one preset binding. It requires a
+v0.1.1 sidecar with `inspectEpisode`; the original v0.1.0 engine
+does not provide that method. Keep the existing installation and data. Do not
+run `apply`, recreate the preset, or import the whole candidate bundle over an
+existing install: the clean installer continues to refuse ID conflicts.
+
+1. Back up both data volumes. Replace only the sidecar image with one that
+   includes the chat memory view. Keep the same project, volumes, network and
+   token; leave the Open WebUI image and service unchanged. Render the new
+   bundle using the `bundle` command above, without continuing to `apply`.
+   From its JSON, copy **only** the `functions` object whose `id` is
+   `reverie_memory` into a new JSON array containing that single object. Do not
+   include the other Functions or the model object.
+2. In native **Admin → Functions**, confirm `reverie_memory` does not already
+   exist. Import that single-Function JSON with **Import JSON**.
+   Confirm the ID is `reverie_memory`, the name is **Memory for this chat**, and
+   the content matches the reviewed candidate. Enable it as an Action. Leave
+   the existing Filter, Event and Actions intact.
+3. Edit the **existing Reverie Companion** preset in native model administration.
+   Append **Memory for this chat** to its selected Actions. Preserve every
+   existing Action, base model, parameter, capability and access grant, then
+   save. Do not import or recreate the preset from the bundle.
+4. As the granted player, open an existing private opted-in saved chat and use
+   **Memory for this chat** under the latest completed reply. Confirm the saved
+   cutoff and recollections, or the explicit not-memorized/empty/re-memorizing state.
+   Verify the two existing Actions still appear and the native deletion Event
+   remains active. No chat or memory needs to be regenerated for this addition.
+
+The new Action only reads the current owner's opted-in saved chat. Use it under
+the latest completed reply to check the open branch. It identifies the cutoff
+with an assistant reply number and short excerpt. Continuing the branch
+preserves the earlier cutoff; editing the saved prefix or opening the view on
+another branch shows **Needs re-memorizing**, without old recollections. An
+older reply above a fork can ask you to check under the latest reply. A scene with no
+recollections is distinct from a scene that was never memorized. Pending native
+deletion cleanup or unavailable/corrupt provenance storage blocks the view; it
+does not run cleanup, recall, reflection or repair.
+
+To roll back the addition, remove only **Memory for this chat** from the preset,
+disable that Function, and restore the previous sidecar image pin. Keep both volumes.
 
 ## 3. Check your setup
 
@@ -100,6 +147,6 @@ This alpha does not support shared or nested folders, attachments or tools in en
 ## Disable without deleting data
 
 1. Change enabled folders to an ordinary default model.
-2. In native Admin Functions, disable **Reverie continuity**, **Reverie native deletion**, **What reached this reply?**, and **Memorize through this reply**. Detach the Actions from the preset or disable/remove the preset through model administration.
+2. In native Admin Functions, disable **Reverie continuity**, **Reverie native deletion**, **What reached this reply?**, **Memorize through this reply**, and **Memory for this chat**. Detach the Actions from the preset or disable/remove the preset through model administration.
 3. Verify an ordinary chat. Then remove the sidecar service and its dedicated network configuration, remove the Reverie environment entries from the UI, and recreate it normally without changing its image or existing data volume.
 4. Keep both named volumes. The UI volume contains chats and Reverie records; `reverie_data` contains engine databases. Do **not** use `docker compose down --volumes` to disable Reverie.

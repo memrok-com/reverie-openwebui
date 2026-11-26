@@ -14,7 +14,8 @@ Give a roleplay character a memory across saved chats. A private folder holds on
 1. Create a private top-level folder. In **Folder options → Edit → Advanced**, set **Reverie Companion** as the first default model.
 2. Start a saved chat in that folder. Describe your character receiving a brass compass. After you send, enter a story date such as `2010-06-12`. A completed reply shows the date.
 3. On that reply, choose **Memorize through this reply**, confirm, and wait for the save confirmation. Saving a chat alone doesn’t create memory.
-4. Start a *new chat in the same folder*, set a later date such as `2011-06-12`, and ask what the character kept from the meeting. Open **What reached this reply?** under the new reply to check whether the compass scene was supplied to the model. The inspector, not whether the model mentions the compass, tells you what memory reached the reply.
+4. Under the latest completed reply, open **Memory for this chat** to see how far you memorized and what this chat contributed. A memorized scene can have no recollections; an edited or different branch may need re-memorizing.
+5. Start a *new chat in the same folder*, set a later date such as `2011-06-12`, and ask what the character kept from the meeting. Open **What reached this reply?** under the new reply to check whether the compass scene was supplied to the model. The inspector, not whether the model mentions the compass, tells you what memory reached the reply.
 
 ## Alpha limits
 

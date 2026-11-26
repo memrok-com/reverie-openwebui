@@ -13,14 +13,16 @@ class PackageTests(unittest.TestCase):
     def test_bundle_reproducible_and_native_attachment(self):
         package = install.bundle('synthetic-companion','synthetic-user')
         self.assertEqual(package,install.bundle('synthetic-companion','synthetic-user'))
-        self.assertEqual(package['model']['meta']['actionIds'],['reverie_inspect','reverie_memorize'])
+        self.assertEqual(package['model']['meta']['actionIds'],['reverie_inspect','reverie_memorize','reverie_memory'])
+        ns, _, _ = load('memory')
+        self.assertTrue(callable(ns['Action']().action))
         self.assertEqual(package['model']['meta']['capabilities'],{'memory':False,'builtin_tools':False})
         self.assertIn('recall scenes you’ve memorized', package['model']['meta']['description'])
         self.assertIn('folder default', package['model']['meta']['description'])
         for function in package['functions']:
             compile(function['content'], function['id'], 'exec')
             self.assertNotIn('__OPTED__',function['content'])
-        self.assertEqual([x['id'] for x in package['functions']],['reverie_filter','reverie_inspect','reverie_memorize','reverie_event'])
+        self.assertEqual([x['id'] for x in package['functions']],['reverie_filter','reverie_inspect','reverie_memorize','reverie_event','reverie_memory'])
 
     def test_installer_rejects_nonlocal_and_conflicts_before_writes(self):
         for url in ('https://example.invalid','http://localhost.evil','http://127.0.0.1/x','http://user@localhost','http://localhost?x=y'):

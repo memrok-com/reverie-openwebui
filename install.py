@@ -1,4 +1,4 @@
-"""Reproducible v0.1 bundle and explicit local-only clean installation; stdlib only."""
+"""Reproducible Function bundle and explicit local-only clean installation; stdlib only."""
 import argparse
 import json
 from pathlib import Path
@@ -8,7 +8,8 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 
 ROOT = Path(__file__).resolve().parent
 UI_IMAGE = 'ghcr.io/open-webui/open-webui@sha256:0c4439e78c24c85e3e7a41936771d3b02f0df38daf28a086cd83ca74804f7676'
-ENGINE_REVISION = 'd679b6fc8cdcd329946f5dce74dc0610319b7f0f'
+ENGINE_REVISION = 'ca969c4e64bae35f9d1ea92df53535be85a6658e'
+BUNDLE_VERSION = '0.1.1'
 
 class InstallError(Exception):
     pass
@@ -20,13 +21,13 @@ class NoRedirect(HTTPRedirectHandler):
 def bundle(base_model, user_id):
     common = (ROOT/'functions/common.py').read_text()
     functions = []
-    for kind, name in (('filter','Reverie continuity'), ('inspect','What reached this reply?'), ('memorize','Memorize through this reply'), ('event','Reverie native deletion')):
-        content = ('"""\ntitle: '+name+'\nversion: 0.1.0\n"""\n'+common+'\n'+(ROOT/f'functions/{kind}.py').read_text())
+    for kind, name in (('filter','Reverie continuity'), ('inspect','What reached this reply?'), ('memorize','Memorize through this reply'), ('event','Reverie native deletion'), ('memory','Memory for this chat')):
+        content = ('"""\ntitle: '+name+'\nversion: '+BUNDLE_VERSION+'\n"""\n'+common+'\n'+(ROOT/f'functions/{kind}.py').read_text())
         functions.append({'id':'reverie_'+kind, 'name':name, 'content':content, 'meta':{}})
     model = {'id':'reverie-companion', 'name':'Reverie Companion', 'base_model_id':base_model,
         'meta':{'description':'Lets your character recall scenes you’ve memorized in this folder. Set as the folder default; choosing it for one chat doesn’t turn memory on.',
                 'capabilities':{'memory':False,'builtin_tools':False},
-                'actionIds':['reverie_inspect','reverie_memorize']},
+                'actionIds':['reverie_inspect','reverie_memorize','reverie_memory']},
         'params':{}, 'access_grants':[{'principal_type':'user','principal_id':user_id,'permission':'read'}]}
     return {'format':1, 'open_webui':'0.13.4', 'ui_image':UI_IMAGE,
             'reverie':'0.3.0', 'engine_revision':ENGINE_REVISION, 'functions':functions,'model':model}
@@ -123,7 +124,7 @@ def main():
                 raise InstallError('Apply requires --token-stdin.')
             token = sys.stdin.readline().rstrip('\r\n')
             apply(Client(args.url,token), package)
-            print('Created and verified four Functions, active Event, global Filter and Reverie Companion preset.')
+            print('Created and verified five Functions, active Event, global Filter and Reverie Companion preset.')
     except (InstallError, OSError) as error:
         parser.exit(1, str(error)+'\n')
 
