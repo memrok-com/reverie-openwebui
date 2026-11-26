@@ -11,7 +11,7 @@ from demo.fixture import reflection
 
 ENGINE = os.environ.get('REVERIE_TEST_ENGINE')
 
-@unittest.skipUnless(ENGINE, 'Set REVERIE_TEST_ENGINE to the pinned local v0.3.0 executable; no engine was provisioned by this suite.')
+@unittest.skipUnless(ENGINE, 'Set REVERIE_TEST_ENGINE to the pinned local executable; no engine was provisioned by this suite.')
 class EngineIntegrationTests(unittest.TestCase):
     def test_dated_source_and_string_reflection(self):
         with tempfile.TemporaryDirectory() as data:
@@ -32,6 +32,9 @@ class EngineIntegrationTests(unittest.TestCase):
                     if state['state']=='callback':
                         self.assertNotEqual(method, 'forget', 'forget must never request callbacks')
                         frame = state['callback']
+                        if method == 'inspectEpisode':
+                            self.assertEqual(frame['method'], 'source.read')
+                            self.assertEqual(frame['params']['episodeId'], params['episodeId'])
                         if frame['method']=='source.read':
                             answer = {'foundation':'Synthetic private continuity.','messages':messages,'recallHistory':[]}
                         else:
@@ -56,12 +59,17 @@ class EngineIntegrationTests(unittest.TestCase):
                 run('when', {'episodeId':episode_id,'position':day})
                 self.assertEqual(run('memorize', {'episodeId':episode_id,'modelKey':'reverie-reflection'})['status'], 'published')
             provider_online = False
+            inspected = run('inspectEpisode', {'episodeId':'derived-scene'})
+            self.assertEqual(inspected['state'], 'published')
+            self.assertTrue(inspected['memories'])
+            self.assertEqual(set(inspected['memories'][0]), {'gist','detail','feeling','confidence'})
             forgotten = run('forget', {'episodeId':'removed-scene'})
             self.assertEqual(forgotten['episodeId'], 'removed-scene')
             self.assertEqual(forgotten['invalidatedEpisodes'], 2)
             episodes = {x['id']:x for x in run('status', {})['episodes']}
             self.assertNotIn('removed-scene', episodes)
             self.assertIsNone(episodes['derived-scene']['published_end'])
+            self.assertEqual(run('inspectEpisode', {'episodeId':'derived-scene'})['state'], 'invalidated')
             self.assertIsNotNone(episodes['synthetic-episode']['published_end'])
             self.assertEqual(run('forget', {'episodeId':'removed-scene'}),
                              {'episodeId':'removed-scene','invalidatedEpisodes':0})

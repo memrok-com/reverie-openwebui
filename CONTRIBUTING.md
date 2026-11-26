@@ -24,7 +24,7 @@ docker run --rm --network none --entrypoint python3 \
   reverie-openwebui:local -B -m unittest discover -s tests -v
 ```
 
-Staging fetches Reverie v0.3.0 at the pinned commit, compiles with the pinned Rust builder using `cargo --locked`, and places the binary and verbatim upstream license and notice in `.stage/engine/`. None of those staged files belong in a commit. The runtime image needs no build tools or downloads at startup.
+Staging fetches the pinned Reverie commit, compiles with the pinned Rust builder using `cargo --locked`, and places the binary and verbatim upstream license and notice in `.stage/engine/`. None of those staged files belong in a commit. The runtime image needs no build tools or downloads at startup.
 
 For changes to the user flow, exercise native Open WebUI controls using the [isolated synthetic demo](docs/demo.md), including an ordinary chat outside an enabled folder. Report what you exercised and distinguish synthetic transport checks from real-provider behavior. Never use the demo token or services for real chats.
 
