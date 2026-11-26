@@ -26,6 +26,104 @@ def load(kind='filter'):
         exec((ROOT/'functions/common.py').read_text()+'\n'+(ROOT/f'functions/{kind}.py').read_text(), ns)
     return ns, chats, folders
 
+class MemorizeFeedbackTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.n, _, _ = load('memorize')
+        n = self.n
+        self.chat = types.SimpleNamespace(id='c')
+        self.body, self.user = {'chat_id':'c', 'id':'r'}, {'id':'u'}
+        self.confirm = AsyncMock(return_value=True)
+        self.emit = AsyncMock()
+        self.prefix = [{'role':'assistant', 'text':'Synthetic reply'}]
+        n.update(action_scope=AsyncMock(return_value=('character', self.chat)),
+                 played=Mock(return_value=self.prefix), register_scene=Mock(),
+                 guard=AsyncMock(), verify_published_sources=AsyncMock(),
+                 source=AsyncMock(return_value={'messages':self.prefix}),
+                 set_anchor=Mock(), rpc=AsyncMock(return_value={'status':'published'}))
+
+    async def act(self, confirm=None, emit=None):
+        await self.n['Action']().action(self.body, self.user, confirm or self.confirm, emit or self.emit)
+
+    def statuses(self):
+        return [(event['data']['done'], event['data']['description'])
+                for call in self.emit.await_args_list if (event := call.args[0])['type'] == 'status']
+
+    async def test_pending_and_running_duplicate_attempts_cannot_touch_first_run(self):
+        confirmed, consent, running, finish = [asyncio.Event() for _ in range(4)]
+
+        async def ask(_):
+            confirmed.set()
+            await consent.wait()
+            return True
+
+        async def save(*_):
+            running.set()
+            await finish.wait()
+            return {'status':'published'}
+
+        self.confirm.side_effect = ask
+        self.n['rpc'].side_effect = save
+        task = asyncio.create_task(self.act())
+        duplicate_confirm, duplicate_emit = AsyncMock(return_value=False), AsyncMock()
+        try:
+            await asyncio.wait_for(confirmed.wait(), 2)
+            await self.act(duplicate_confirm, duplicate_emit)
+            consent.set()
+            await asyncio.wait_for(running.wait(), 2)
+            await self.act(duplicate_confirm, duplicate_emit)
+            duplicate_confirm.assert_not_awaited()
+            self.assertEqual([c.args[0]['type'] for c in duplicate_emit.await_args_list], ['notification'] * 2)
+            self.assertEqual(self.statuses(), [(False, 'Memorizing…')])
+            self.assertEqual(self.n['rpc'].await_count, 1)
+            self.n['register_scene'].assert_called_once()
+            self.n['set_anchor'].assert_not_called()
+        finally:
+            consent.set()
+            finish.set()
+            await asyncio.wait_for(task, 2)
+        self.n['set_anchor'].assert_called_once()
+        self.assertEqual(self.statuses()[-1], (True, 'Memory saved through this reply.'))
+
+    async def test_decline_failure_and_retry(self):
+        self.confirm.return_value = False
+        await self.act()
+        self.n['rpc'].assert_not_awaited()
+        self.assertEqual(self.statuses(), [])
+        self.confirm.return_value = True
+        for error in (self.n['SceneError']('REFLECTION_FAILED', 'private detail'),
+                      RuntimeError('private detail')):
+            self.n['rpc'].side_effect = error
+            await self.act()
+            self.assertEqual(self.statuses()[-2], (False, 'Memorizing…'))
+            done, description = self.statuses()[-1]
+            self.assertTrue(done)
+            self.assertIn('not verified', description)
+            self.assertNotIn('private detail', str(self.emit.await_args_list))
+            self.n['set_anchor'].assert_not_called()
+        self.n['rpc'].side_effect = None
+        self.n['rpc'].return_value = {'status':'current'}
+        await self.act()
+        self.assertEqual(self.statuses()[-1], (True, 'Already memorized through this reply.'))
+
+    async def test_cancellation_replaces_running_status_and_releases(self):
+        self.n['rpc'].side_effect = asyncio.CancelledError
+        with self.assertRaises(asyncio.CancelledError):
+            await self.act()
+        self.assertTrue(self.statuses()[-1][0])
+        self.assertIn('not verified', self.statuses()[-1][1])
+        self.n['set_anchor'].assert_not_called()
+        self.n['rpc'].side_effect = None
+        await self.act()
+        self.assertEqual(self.statuses()[-1], (True, 'Memory saved through this reply.'))
+
+    async def test_display_failure_does_not_change_save_outcome(self):
+        self.emit.side_effect = OSError('socket not available')
+        await self.act()
+        self.n['rpc'].assert_awaited_once()
+        self.n['set_anchor'].assert_called_once()
+        self.assertEqual(self.statuses(), [(False, 'Memorizing…'), (True, 'Memory saved through this reply.')])
+
+
 class FunctionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.ns, self.chats, self.folders = load()

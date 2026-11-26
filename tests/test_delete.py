@@ -258,7 +258,9 @@ class UseRaceTests(unittest.IsolatedAsyncioTestCase):
         event = AsyncMock()
         await n['Action']().action({'id':'r'}, {'id':'owner'}, AsyncMock(return_value=True), event)
         self.assertIsNone(n['anchor']('character','survivor'))
-        self.assertTrue(all(c.args[0]['data']['type'] != 'success' for c in event.await_args_list))
+        status = [c.args[0]['data'] for c in event.await_args_list if c.args[0]['type'] == 'status']
+        self.assertEqual([item['done'] for item in status], [False, True])
+        self.assertIn('not verified', status[-1]['description'])
 
     async def test_inspector_rechecks_before_displaying_cached_record(self):
         from pathlib import Path
