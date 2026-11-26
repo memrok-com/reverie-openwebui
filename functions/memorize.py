@@ -4,6 +4,15 @@ _save_errors = {
     'INVALID_BRANCH': 'Select a completed character reply on the branch you want to memorize.',
     'UNPLAYED_BRANCH': 'Select a completed character reply on the branch you want to memorize.',
     'PRIVATE_SCOPE_REQUIRED': 'Reverie needs a private chat in your own unshared top-level folder.',
+    'STALE_PUBLISHED_SOURCE': ('Another memorized chat in this continuity has changed or is no longer available in this private folder. '
+                               'Unarchive it if needed, return it to its original folder and turn off sharing. '
+                               'If the branch changed, memorize the desired reply there again.'),
+    'LEGACY_SOURCE': 'This release cannot use memory from an earlier preview. Ask your administrator about a clean installation.',
+    'MEMORY_CHANGED': 'Memory save not verified: memory changed during this operation. Retry in a surviving scene.',
+    'SOURCE_DELETED': 'Memory save not verified: the scene was deleted. Retry in a surviving scene.',
+    'STALE_SELECTION': 'The selected branch changed. Check Memory for this chat, then select the reply you want to memorize.',
+    'REVERIE_UNAVAILABLE': 'Reverie is unavailable. When it is back, check Memory for this chat before retrying.',
+    'REVERIE_TIMEOUT': 'Reverie did not finish in time. Check Memory for this chat before retrying.',
     'ADAPTER_CONFIG': 'Memory save not verified. Ask your administrator to check the Reverie adapter configuration.',
     'REFLECTION_CONFIG': 'Memory save not verified. Ask your administrator to check the reflection model configuration.',
     'REFLECTION_FAILED': 'Memory save not verified: reflection failed. Check Memory for this chat before retrying.',

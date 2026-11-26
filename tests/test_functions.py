@@ -236,6 +236,40 @@ class FunctionTests(unittest.IsolatedAsyncioTestCase):
             await n['verify_published_sources']({'id':'u'}, character)
         self.assertEqual(cm.exception.code, 'STALE_PUBLISHED_SOURCE')
 
+    async def test_memorize_explains_recovery_for_another_stale_published_chat(self):
+        n, chats, folders = load('memorize')
+        n.update(DB=self.ns['DB'], chat_exists=AsyncMock(return_value=True), rpc=AsyncMock())
+        old = types.SimpleNamespace(**vars(self.chat))
+        old.id = 'other-scene'
+        chats.get_chat_by_id_and_user_id.side_effect = lambda cid, uid: (
+            self.chat if cid == 'c' else old if cid == old.id else None)
+        folders.get_folder_by_id_and_user_id.return_value = self.folder
+        user = {'id':'u'}
+        character, _ = await n['scope'](user, 'c')
+        n['register_scene']('u', character, old.id)
+        n['set_anchor'](character, old.id, 'r', n['played'](old, 'r'))
+        original_anchor = n['anchor'](character, old.id)
+        other_history = {'messages':{**old.chat['history']['messages'],
+            'r':{**old.chat['history']['messages']['r'], 'content':'Edited synthetic reply'}}}
+
+        for field, value, recovery in (
+            ('folder_id', None, 'return it to its original folder'),
+            ('share_id', 'shared', 'turn off sharing'),
+            ('chat', {'history':other_history}, 'memorize the desired reply there again'),
+        ):
+            with self.subTest(field=field), patch.object(old, field, value):
+                emit = AsyncMock()
+                await n['Action']().action({'chat_id':'c', 'id':'r'}, user, AsyncMock(return_value=True), emit)
+                progress, result = [call.args[0]['data'] for call in emit.await_args_list]
+                self.assertFalse(progress['done'])
+                self.assertTrue(result['done'])
+                self.assertIn('Another memorized chat', result['description'])
+                self.assertIn(recovery, result['description'])
+                self.assertNotIn('Check Memory for this chat', result['description'])
+                n['rpc'].assert_not_awaited()
+                self.assertIsNone(n['anchor'](character, 'c'))
+                self.assertEqual(n['anchor'](character, old.id), original_anchor)
+
     async def test_unanchored_recall_identifies_only_a_scene_in_this_folder(self):
         n = self.ns
         other = types.SimpleNamespace(**vars(self.chat))
