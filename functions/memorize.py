@@ -1,17 +1,67 @@
+_active_memorize = set()
+_unverified = 'Memory save not verified. Check Memory for this chat before retrying.'
+_save_errors = {
+    'INVALID_BRANCH': 'Select a completed character reply on the branch you want to memorize.',
+    'UNPLAYED_BRANCH': 'Select a completed character reply on the branch you want to memorize.',
+    'PRIVATE_SCOPE_REQUIRED': 'Reverie needs a private chat in your own unshared top-level folder.',
+    'STALE_PUBLISHED_SOURCE': ('Another memorized chat in this continuity has changed or is no longer available in this private folder. '
+                               'Unarchive it if needed, return it to its original folder and turn off sharing. '
+                               'If the branch changed, memorize the desired reply there again.'),
+    'LEGACY_SOURCE': 'This release cannot use memory from an earlier preview. Ask your administrator about a clean installation.',
+    'MEMORY_CHANGED': 'Memory save not verified: memory changed during this operation. Retry in a surviving scene.',
+    'SOURCE_DELETED': 'Memory save not verified: the scene was deleted. Retry in a surviving scene.',
+    'STALE_SELECTION': 'The selected branch changed. Check Memory for this chat, then select the reply you want to memorize.',
+    'REVERIE_UNAVAILABLE': 'Reverie is unavailable. When it is back, check Memory for this chat before retrying.',
+    'REVERIE_TIMEOUT': 'Reverie did not finish in time. Check Memory for this chat before retrying.',
+    'ADAPTER_CONFIG': 'Memory save not verified. Ask your administrator to check the Reverie adapter configuration.',
+    'REFLECTION_CONFIG': 'Memory save not verified. Ask your administrator to check the reflection model configuration.',
+    'REFLECTION_FAILED': 'Memory save not verified: reflection failed. Check Memory for this chat before retrying.',
+    'EPISODE_TIME_REQUIRED': 'Memory save not verified: this scene has no story date. Set a story date on a character turn first.',
+    'CHARACTER_BUSY': 'Reverie is busy with another operation. Wait for it to finish, then check Memory for this chat.',
+}
+
+
+async def _feedback(emit, text, *, done=None, kind='info'):
+    # Socket delivery is best effort. In particular, an anchored save must not
+    # be reported as failed just because its display could not be delivered.
+    try:
+        if done is None:
+            await tell(emit, kind, text)
+        else:
+            await emit({'type':'status', 'data':{
+                'action':'reverie_memorize', 'description':text, 'done':done}})
+    except Exception:
+        pass
+
+
 class Action:
     async def action(self, body, __user__, __event_call__, __event_emitter__):
+        lease = None
+        running = False
+        result_text = _unverified
         try:
             scoped = await action_scope(__user__, body, __event_call__)
             if not scoped:
                 return
             character, chat = scoped
+            owner = field(__user__, 'id')
+            key = (owner, character)
+            # This check and acquisition have no intervening await. The host's
+            # function module guards the confirmation and save in this worker;
+            # the sidecar still excludes overlapping character jobs across workers.
+            if key in _active_memorize:
+                await _feedback(__event_emitter__, 'A Memorize request is already open or running in this continuity.')
+                return
+            _active_memorize.add(key)
+            lease = key
             reply = body.get('id')
             prefix = played(chat, reply)
             if not await popup(__event_call__, 'Memorize through this reply?',
-                    'Save fallible character memory from the selected branch through this completed reply, including earlier played messages. Later replies and other branches are excluded. Wait for the save status. Cancelling here saves nothing.'):
-                await tell(__event_emitter__, 'info', 'Memorizing cancelled. Existing memory is unchanged.')
+                    'Save fallible character memory from the selected branch through this completed reply, including earlier played messages. Later replies and other branches are excluded. The save result appears above this reply. Cancelling here saves nothing.'):
+                await _feedback(__event_emitter__, 'Memorizing cancelled. Existing memory is unchanged.')
                 return
-            owner = field(__user__, 'id')
+            running = True
+            await _feedback(__event_emitter__, 'Memorizing…', done=False)
             register_scene(owner, character, chat.id)
             token = await guard(owner, character, current=chat.id)
             await verify_published_sources(__user__, character, selecting=chat.id)
@@ -57,8 +107,18 @@ class Action:
                 raise SceneError('SAVE_UNVERIFIED', 'Memory save was not verified. Inspect before retrying.')
             await guard(owner, character, token, chat.id)
             set_anchor(character, chat.id, reply, prefix, expected=token)
-            await tell(__event_emitter__, 'success', 'Already memorized through this reply.' if result['status']=='current' else 'Memory saved through this reply.')
-        except sqlite3.Error:
-            await tell(__event_emitter__, 'error', 'Memory state is unavailable. Retry before using memory.')
-        except SceneError as error:
-            await tell(__event_emitter__, 'error', str(error))
+            result_text = 'Already memorized through this reply.' if result['status']=='current' else 'Memory saved through this reply.'
+        except Exception as error:
+            if isinstance(error, sqlite3.Error):
+                result_text = 'Memory save not verified: storage is unavailable. Check Memory for this chat before retrying.'
+            elif isinstance(error, SceneError) and isinstance(error.code, str):
+                result_text = _save_errors.get(error.code, _unverified)
+            if not running:
+                await _feedback(__event_emitter__, result_text, kind='error')
+        finally:
+            try:
+                if running:
+                    await _feedback(__event_emitter__, result_text, done=True)
+            finally:
+                if lease is not None:
+                    _active_memorize.remove(lease)

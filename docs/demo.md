@@ -17,6 +17,16 @@ required. An unsent prompt or authored transcript cannot demonstrate memory
 formation, provider behavior, or a completed-reply provenance record. Synthetic
 checks do not establish model quality, discoverability or production readiness.
 
+Check that **Memorizing…** appears above the selected reply after confirmation,
+then gives way to a readable result. Slow the fixture’s reflection to try a
+second click during the wait: it must not open another confirmation or start a
+second reflection. Check a cancel does not save, a repeat on the same cutoff
+says it is already memorized, and `[fail-reflection]` leaves a failure result
+without a new saved cutoff. The duplicate-click guard is local to one Open WebUI
+worker; the sidecar still excludes concurrent jobs for the same continuity.
+After a disconnect or restart, inspect the saved cutoff rather than trusting a
+status that may not have received its final update.
+
 For the chat memory view, check **Memory for this chat** before memorizing,
 after a published save (including an empty recollection result), after adding
 later messages, and after selecting an alternate or editing through the saved
