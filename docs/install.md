@@ -142,7 +142,7 @@ As the granted user, follow [Try two scenes](../README.md#try-two-scenes). If yo
 - **Archive, move, or share** does not forget the chat. If play is paused, unarchive the original chat if necessary, return it to its original folder (Open WebUI does not do this automatically), and make it private. To update a changed branch, explicitly memorize the desired reply again. Deleting a folder without its contents does not purge memory.
 - Keep the **Reverie native deletion** Event active. Open WebUI delivers deletion events on a best-effort basis; missing scene cleanup is retried before memory use in a surviving continuity. Failed cleanup pauses memory use rather than treating a lookup failure as deletion. **Account deletion has no automatic retry if initial cleanup fails or is missed**, so residual memory can remain. Logical deletion does not guarantee erasure from database pages or backups; minimal ID-only records can remain for safe retries.
 
-This alpha does not support shared or nested folders, attachments or tools in enabled chats, Continue, redating, or restoring chats and memory. Model quality and formation latency vary by provider; the synthetic demo does not establish production readiness.
+This release does not support shared or nested folders, attachments or tools in enabled chats, Continue, redating, or restoring chats and memory. Model quality and formation latency vary by provider; the synthetic demo does not establish production readiness.
 
 ## Disable without deleting data
 
